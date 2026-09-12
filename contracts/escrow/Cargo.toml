@@ -17,6 +17,7 @@ trustescrow-types = { workspace = true }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 trustescrow-types = { workspace = true, features = ["testutils"] }
+trustescrow-code = { workspace = true }
 
 [features]
 testutils = ["soroban-sdk/testutils", "trustescrow-types/testutils"]

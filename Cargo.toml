@@ -11,6 +11,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 soroban-sdk = "27.0.6"
 trustescrow-types = { path = "crates/types" }
+trustescrow-code = { path = "crates/code" }
 
 # Soroban contracts are billed by deployed WASM size and CPU instructions, so the
 # release profile optimises for size. `overflow-checks` stays on: an arithmetic

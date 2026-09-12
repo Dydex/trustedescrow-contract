@@ -817,6 +817,49 @@ fn confirmation_and_escalation_race_at_receipt_deadline() {
     assert_eq!(escalated.state(), State::Disputed);
 }
 
+// --- Delivery code format ----------------------------------------------------
+//
+// The contract hashes exactly the bytes it is given. These tests tie it to the
+// reference implementation in trustescrow-code that every client must match.
+
+#[test]
+fn generated_code_round_trips_through_the_contract() {
+    let env = new_env();
+    let mut params = default_params(&env);
+    let code = trustescrow_code::encode(&[0x5a; 10]);
+    params.order.release_code_hash =
+        BytesN::from_array(&env, &trustescrow_code::release_code_hash(&code));
+    let s = setup_from(env, params).delivered();
+
+    // The buyer reads the display form aloud; the seller types it in
+    // lowercase. After normalisation it is the committed code.
+    let typed = trustescrow_code::display(&code).to_lowercase();
+    let canonical = trustescrow_code::normalise(&typed).unwrap();
+    s.escrow
+        .release_with_code(&Bytes::from_slice(&s.env, &canonical));
+    s.assert_seller_paid();
+}
+
+#[test]
+fn unnormalised_display_form_is_rejected() {
+    let s = setup().delivered();
+    assert_err(
+        s.escrow
+            .try_release_with_code(&Bytes::from_slice(&s.env, b"K7M2-9XQF-4TBN-R3WD")),
+        Error::InvalidCode,
+    );
+}
+
+#[test]
+fn reference_hash_matches_the_contract() {
+    let s = setup();
+    let code: &[u8; 16] = CODE.try_into().unwrap();
+    assert_eq!(
+        s.get().release_code_hash.to_array(),
+        trustescrow_code::release_code_hash(code)
+    );
+}
+
 // --- Storage TTL -------------------------------------------------------------
 //
 // An archived escrow cannot be touched until restored, which for users looks
