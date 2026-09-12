@@ -1,0 +1,127 @@
+{
+  "description": "TrustEscrow delivery code vectors. A code is 80 bits of entropy as 16 Crockford base32 characters, most significant bits first. release_code_hash is sha256 of the 16 canonical ASCII characters. Normalisation strips ASCII whitespace and hyphens, uppercases, and maps I and L to 1 and O to 0; anything else outside the alphabet, U included, is a character error, checked before length.",
+  "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+  "encoding": [
+    {
+      "entropy_hex": "00000000000000000000",
+      "code": "0000000000000000",
+      "display": "0000-0000-0000-0000",
+      "sha256_hex": "fcdb4b423f4e5283afa249d762ef6aef150e91fccd810d43e5e719d14512dec7"
+    },
+    {
+      "entropy_hex": "ffffffffffffffffffff",
+      "code": "ZZZZZZZZZZZZZZZZ",
+      "display": "ZZZZ-ZZZZ-ZZZZ-ZZZZ",
+      "sha256_hex": "1c712ecc21e27e374111d5a1beeaf75a4e343b3814c1847cba14013420809873"
+    },
+    {
+      "entropy_hex": "80000000000000000000",
+      "code": "G000000000000000",
+      "display": "G000-0000-0000-0000",
+      "sha256_hex": "c10a39032f3b16b97031172639fab835db1baad5532363d75227db2040892224"
+    },
+    {
+      "entropy_hex": "00000000000000000001",
+      "code": "0000000000000001",
+      "display": "0000-0000-0000-0001",
+      "sha256_hex": "665e994827f6b03167e80c1513eb356e0d4f013f2e03a3b345e1e5e3c24dfca6"
+    },
+    {
+      "entropy_hex": "00000000000000000020",
+      "code": "0000000000000010",
+      "display": "0000-0000-0000-0010",
+      "sha256_hex": "fb4714aaedd1c0f5682d402c31131f1f85a57236e4f47cd111acf596e3241ab4"
+    },
+    {
+      "entropy_hex": "00010203040506070809",
+      "code": "000G40R40M30E209",
+      "display": "000G-40R4-0M30-E209",
+      "sha256_hex": "aeeb2510e5ce5b7236de16bbe701d941ee2228747af43165f6b6cd59f69c0d79"
+    },
+    {
+      "entropy_hex": "deadbeefcafebabe1234",
+      "code": "VTPVXVYAZTXBW4HM",
+      "display": "VTPV-XVYA-ZTXB-W4HM",
+      "sha256_hex": "a49dd3e29ce525b145a22d4f46fc907ab48e012945d3dc78d500d19b1294a357"
+    },
+    {
+      "entropy_hex": "5a133e1ead85c7d3a357",
+      "code": "B89KW7NDGQ3X78TQ",
+      "display": "B89K-W7ND-GQ3X-78TQ",
+      "sha256_hex": "fe65b6a773605c3cfe081c102d05e34d953dc64d4629567ab59fccddde1022cb"
+    },
+    {
+      "entropy_hex": "fb027dacf2c0a11a7d09",
+      "code": "ZC17VB7JR2GHMZ89",
+      "display": "ZC17-VB7J-R2GH-MZ89",
+      "sha256_hex": "91d04e9c55b12fff3dfbef23471d3ba4506338ffe63f41b9fc2809db02d9afa4"
+    },
+    {
+      "entropy_hex": "b7cc76f175bba55dcac5",
+      "code": "PZ67DWBNQEJNVJP5",
+      "display": "PZ67-DWBN-QEJN-VJP5",
+      "sha256_hex": "0716e9d8e682ab95fc44b02c1fed98e33cd21f416ad635d184630e5f93ffb581"
+    },
+    {
+      "entropy_hex": "fbfc0edf300cdf72645d",
+      "code": "ZFY0XQSG1KFQ4S2X",
+      "display": "ZFY0-XQSG-1KFQ-4S2X",
+      "sha256_hex": "8a42731e9e18bdf6db35ad58b400c0f142c9858e2999e172e83d120b8142b564"
+    }
+  ],
+  "normalisation": [
+    {
+      "input": "K7M2-9XQF-4TBN-R3WD",
+      "canonical": "K7M29XQF4TBNR3WD",
+      "sha256_hex": "0a87d3bb0ce9bdc17f7e951c6d855d494c16fa6ec1b388a5696bcd37c5ace5fe"
+    },
+    {
+      "input": "k7m2 9xqf 4tbn r3wd",
+      "canonical": "K7M29XQF4TBNR3WD",
+      "sha256_hex": "0a87d3bb0ce9bdc17f7e951c6d855d494c16fa6ec1b388a5696bcd37c5ace5fe"
+    },
+    {
+      "input": " K7M29XQF4TBNR3WD\n",
+      "canonical": "K7M29XQF4TBNR3WD",
+      "sha256_hex": "0a87d3bb0ce9bdc17f7e951c6d855d494c16fa6ec1b388a5696bcd37c5ace5fe"
+    },
+    {
+      "input": "0000-1111-LLLL-IIII",
+      "canonical": "0000111111111111",
+      "sha256_hex": "71de984e2fb55733c8efcc366f0da2e2932a4916bbeb53135e61a2810b37cd61"
+    },
+    {
+      "input": "OOOO-oooo-1111-iiii",
+      "canonical": "0000000011111111",
+      "sha256_hex": "ea2e637a0551b3f8ebf13374587cd432e54f8efbfd70ed486e677bc0c4bf5829"
+    },
+    {
+      "input": "K7M2-9XQF-4TBN-R3W",
+      "error": "length"
+    },
+    {
+      "input": "K7M2-9XQF-4TBN-R3WDX",
+      "error": "length"
+    },
+    {
+      "input": "",
+      "error": "length"
+    },
+    {
+      "input": "K7M2-9XQF-4TBN-R3WU",
+      "error": "character"
+    },
+    {
+      "input": "K7M2_9XQF_4TBN_R3WD",
+      "error": "character"
+    },
+    {
+      "input": "K7M2-9XQF-4TBN-R3W*",
+      "error": "character"
+    },
+    {
+      "input": "K7M2\u20139XQF4TBNR3WD",
+      "error": "character"
+    }
+  ]
+}
