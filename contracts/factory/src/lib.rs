@@ -1,0 +1,180 @@
+#![no_std]
+//! TrustEscrow factory. Deploys one escrow instance per trade and holds the
+//! operator configuration copied into each new escrow.
+//!
+//! Configuration changes never reach existing escrows: each instance stores its
+//! own arbitrator and fee at creation and has no setter.
+
+use soroban_sdk::{
+    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
+    xdr::ToXdr, Address, Bytes, BytesN, Env,
+};
+
+pub use trustescrow_types::{EscrowParams, Order, MAX_FEE_BPS};
+
+const DAY_IN_LEDGERS: u32 = 17_280;
+const TTL_THRESHOLD: u32 = 30 * DAY_IN_LEDGERS;
+const TTL_EXTEND_TO: u32 = 120 * DAY_IN_LEDGERS;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Config {
+    pub admin: Address,
+    pub escrow_wasm_hash: BytesN<32>,
+    pub arbitrator: Address,
+    pub fee_recipient: Address,
+    pub fee_bps: u32,
+}
+
+#[contracttype]
+enum DataKey {
+    Config,
+    Token(Address),
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    TokenNotAllowed = 1,
+    InvalidFee = 2,
+}
+
+#[contractevent(topics = ["escrow"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowCreated {
+    #[topic]
+    pub buyer: Address,
+    #[topic]
+    pub seller: Address,
+    pub escrow: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+#[contractevent(topics = ["config"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfigUpdated {
+    pub config: Config,
+}
+
+#[contractevent(topics = ["token"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenAllowed {
+    #[topic]
+    pub token: Address,
+    pub allowed: bool,
+}
+
+#[contract]
+pub struct Factory;
+
+#[contractimpl]
+impl Factory {
+    pub fn __constructor(env: Env, config: Config) {
+        write_config(&env, &config);
+    }
+
+    /// Deploy a new escrow for `order`. The buyer authorises creation; the
+    /// escrow address is derived from the buyer and `salt`, so it is known
+    /// before submission and no one else can claim it.
+    pub fn create(env: Env, order: Order, salt: BytesN<32>) -> Address {
+        order.buyer.require_auth();
+        if !Self::is_token_allowed(env.clone(), order.token.clone()) {
+            panic_with_error!(&env, Error::TokenNotAllowed);
+        }
+        let config = Self::config(env.clone());
+        let params = EscrowParams {
+            order: order.clone(),
+            arbitrator: config.arbitrator,
+            fee_bps: config.fee_bps,
+            fee_recipient: config.fee_recipient,
+        };
+
+        let escrow = env
+            .deployer()
+            .with_current_contract(escrow_salt(&env, &order.buyer, &salt))
+            .deploy_v2(config.escrow_wasm_hash, (params,));
+        extend_instance_ttl(&env);
+
+        EscrowCreated {
+            buyer: order.buyer,
+            seller: order.seller,
+            escrow: escrow.clone(),
+            token: order.token,
+            amount: order.amount,
+        }
+        .publish(&env);
+        escrow
+    }
+
+    /// The address `create` will deploy to for this buyer and salt.
+    pub fn escrow_address(env: Env, buyer: Address, salt: BytesN<32>) -> Address {
+        env.deployer()
+            .with_current_contract(escrow_salt(&env, &buyer, &salt))
+            .deployed_address()
+    }
+
+    /// Replace the configuration used for escrows created from now on.
+    pub fn set_config(env: Env, config: Config) {
+        Self::config(env.clone()).admin.require_auth();
+        write_config(&env, &config);
+        ConfigUpdated { config }.publish(&env);
+    }
+
+    pub fn allow_token(env: Env, token: Address, allowed: bool) {
+        Self::config(env.clone()).admin.require_auth();
+        let key = DataKey::Token(token.clone());
+        if allowed {
+            env.storage().persistent().set(&key, &true);
+            extend_persistent_ttl(&env, &key);
+        } else {
+            env.storage().persistent().remove(&key);
+        }
+        TokenAllowed { token, allowed }.publish(&env);
+    }
+
+    pub fn config(env: Env) -> Config {
+        env.storage().instance().get(&DataKey::Config).unwrap()
+    }
+
+    pub fn is_token_allowed(env: Env, token: Address) -> bool {
+        let key = DataKey::Token(token);
+        let allowed = env.storage().persistent().has(&key);
+        if allowed {
+            extend_persistent_ttl(&env, &key);
+        }
+        allowed
+    }
+}
+
+fn write_config(env: &Env, config: &Config) {
+    if config.fee_bps > MAX_FEE_BPS {
+        panic_with_error!(env, Error::InvalidFee);
+    }
+    env.storage().instance().set(&DataKey::Config, config);
+    extend_instance_ttl(env);
+}
+
+fn escrow_salt(env: &Env, buyer: &Address, salt: &BytesN<32>) -> BytesN<32> {
+    let mut preimage = buyer.clone().to_xdr(env);
+    preimage.append(&Bytes::from(salt.clone()));
+    env.crypto().sha256(&preimage).into()
+}
+
+fn ttl_bounds(env: &Env) -> (u32, u32) {
+    let extend_to = TTL_EXTEND_TO.min(env.storage().max_ttl());
+    (TTL_THRESHOLD.min(extend_to), extend_to)
+}
+
+fn extend_instance_ttl(env: &Env) {
+    let (threshold, extend_to) = ttl_bounds(env);
+    env.storage().instance().extend_ttl(threshold, extend_to);
+}
+
+fn extend_persistent_ttl(env: &Env, key: &DataKey) {
+    let (threshold, extend_to) = ttl_bounds(env);
+    env.storage()
+        .persistent()
+        .extend_ttl(key, threshold, extend_to);
+}
