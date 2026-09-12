@@ -774,6 +774,49 @@ fn rejected_call_emits_nothing() {
     assert!(s.escrow_events().is_empty());
 }
 
+// --- Same-ledger races -------------------------------------------------------
+//
+// Transactions in one ledger are applied in order, so when two conflicting
+// calls are both valid the first to land decides and the second must fail
+// cleanly rather than act on a settled escrow.
+
+#[test]
+fn dispute_landing_before_code_blocks_the_release() {
+    let s = setup().delivered();
+    s.escrow.dispute(&s.buyer);
+    assert_err(
+        s.escrow.try_release_with_code(&s.code()),
+        Error::InvalidState,
+    );
+    assert_eq!(s.balance(&s.seller), 0);
+    assert_eq!(s.balance(&s.escrow.address), AMOUNT);
+}
+
+#[test]
+fn code_landing_before_dispute_settles_first() {
+    let s = setup().delivered();
+    s.escrow.release_with_code(&s.code());
+    assert_err(s.escrow.try_dispute(&s.buyer), Error::InvalidState);
+    s.assert_seller_paid();
+}
+
+#[test]
+fn confirmation_and_escalation_race_at_receipt_deadline() {
+    // At receipt_deadline exactly, the buyer may still confirm and anyone may
+    // already escalate. Whichever lands first decides.
+    let confirmed = setup().delivered();
+    confirmed.at(confirmed.get().receipt_deadline);
+    confirmed.escrow.confirm();
+    assert_err(confirmed.escrow.try_escalate(), Error::InvalidState);
+    confirmed.assert_seller_paid();
+
+    let escalated = setup().delivered();
+    escalated.at(escalated.get().receipt_deadline);
+    escalated.escrow.escalate();
+    assert_err(escalated.escrow.try_confirm(), Error::InvalidState);
+    assert_eq!(escalated.state(), State::Disputed);
+}
+
 // --- Terminality -------------------------------------------------------------
 
 #[test]
