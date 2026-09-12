@@ -30,6 +30,7 @@ pub struct Config {
 enum DataKey {
     Config,
     Token(Address),
+    PendingAdmin,
 }
 
 #[contracterror]
@@ -38,6 +39,8 @@ enum DataKey {
 pub enum Error {
     TokenNotAllowed = 1,
     InvalidFee = 2,
+    AdminChangeRequiresTransfer = 3,
+    NoPendingAdmin = 4,
 }
 
 #[contractevent(topics = ["escrow"])]
@@ -64,6 +67,24 @@ pub struct TokenAllowed {
     #[topic]
     pub token: Address,
     pub allowed: bool,
+}
+
+#[contractevent(topics = ["adm_prop"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminProposed {
+    #[topic]
+    pub current: Address,
+    #[topic]
+    pub proposed: Address,
+}
+
+#[contractevent(topics = ["adm_xfer"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferred {
+    #[topic]
+    pub previous: Address,
+    #[topic]
+    pub admin: Address,
 }
 
 #[contract]
@@ -115,11 +136,64 @@ impl Factory {
             .deployed_address()
     }
 
-    /// Replace the configuration used for escrows created from now on.
+    /// Replace the configuration used for escrows created from now on. The
+    /// admin cannot be changed here; use `propose_admin` and `accept_admin`.
     pub fn set_config(env: Env, config: Config) {
-        Self::config(env.clone()).admin.require_auth();
+        let current = Self::config(env.clone());
+        current.admin.require_auth();
+        if config.admin != current.admin {
+            panic_with_error!(&env, Error::AdminChangeRequiresTransfer);
+        }
         write_config(&env, &config);
         ConfigUpdated { config }.publish(&env);
+    }
+
+    /// Start handing the factory to `proposed`. Nothing changes until the
+    /// proposed address accepts, so a mistyped address can never lock the
+    /// factory. Proposing again replaces the pending proposal.
+    pub fn propose_admin(env: Env, proposed: Address) {
+        let current = Self::config(env.clone()).admin;
+        current.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &proposed);
+        extend_instance_ttl(&env);
+        AdminProposed { current, proposed }.publish(&env);
+    }
+
+    /// The proposed admin takes over, proving it can sign.
+    pub fn accept_admin(env: Env) {
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NoPendingAdmin));
+        pending.require_auth();
+
+        let mut config = Self::config(env.clone());
+        let previous = config.admin;
+        config.admin = pending.clone();
+        write_config(&env, &config);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        AdminTransferred {
+            previous,
+            admin: pending,
+        }
+        .publish(&env);
+    }
+
+    /// Withdraw a pending proposal.
+    pub fn cancel_admin_transfer(env: Env) {
+        Self::config(env.clone()).admin.require_auth();
+        if !env.storage().instance().has(&DataKey::PendingAdmin) {
+            panic_with_error!(&env, Error::NoPendingAdmin);
+        }
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        extend_instance_ttl(&env);
+    }
+
+    pub fn pending_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PendingAdmin)
     }
 
     pub fn allow_token(env: Env, token: Address, allowed: bool) {
