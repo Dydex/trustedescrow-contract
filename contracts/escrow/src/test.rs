@@ -163,6 +163,41 @@ impl Setup<'_> {
         assert_eq!(self.balance(&self.fee_recipient), 0);
         assert_eq!(self.balance(&self.escrow.address), 0);
     }
+
+    /// Every mutating entry point must reject a terminal escrow.
+    fn assert_closed(&self) {
+        let (uri, hash, code) = (self.uri(TRACKING_URI), self.hash(), self.code());
+        assert_err(self.escrow.try_fund(), Error::InvalidState);
+        assert_err(self.escrow.try_cancel(&self.buyer), Error::InvalidState);
+        assert!(self
+            .escrow
+            .try_submit_proof(&ProofKind::Tracking, &uri, &hash)
+            .is_err());
+        assert!(self
+            .escrow
+            .try_submit_proof_with_code(&ProofKind::Tracking, &uri, &hash, &code)
+            .is_err());
+        assert_err(
+            self.escrow.try_release_with_code(&code),
+            Error::InvalidState,
+        );
+        assert_err(self.escrow.try_confirm(), Error::InvalidState);
+        assert_err(self.escrow.try_dispute(&self.buyer), Error::InvalidState);
+        assert_err(self.escrow.try_escalate(), Error::InvalidState);
+        assert_err(
+            self.escrow.try_resolve(&Outcome::Refund),
+            Error::InvalidState,
+        );
+        assert_err(
+            self.escrow.try_refund_after_delivery_timeout(),
+            Error::InvalidState,
+        );
+        assert_err(
+            self.escrow.try_refund_after_arbitration_timeout(),
+            Error::InvalidState,
+        );
+        assert_err(self.escrow.try_seller_refund(), Error::InvalidState);
+    }
 }
 
 // --- Construction ------------------------------------------------------------
@@ -606,6 +641,23 @@ fn stranger_cannot_dispute() {
     let s = setup().delivered();
     let stranger = Address::generate(&s.env);
     assert_err(s.escrow.try_dispute(&stranger), Error::NotParticipant);
+}
+
+// --- Terminality -------------------------------------------------------------
+
+#[test]
+fn terminal_states_accept_no_transitions() {
+    let released = setup().delivered();
+    released.escrow.release_with_code(&released.code());
+    released.assert_closed();
+
+    let refunded = setup().funded();
+    refunded.escrow.seller_refund();
+    refunded.assert_closed();
+
+    let cancelled = setup();
+    cancelled.escrow.cancel(&cancelled.buyer);
+    cancelled.assert_closed();
 }
 
 // --- Seller refund -----------------------------------------------------------
