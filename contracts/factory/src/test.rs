@@ -319,3 +319,91 @@ fn rejected_create_emits_nothing() {
     assert!(s.factory.try_create(&order, &s.salt(1)).is_err());
     assert!(s.events_of(&s.factory.address).is_empty());
 }
+
+// --- Admin transfer ----------------------------------------------------------
+
+fn assert_signed_by(s: &Setup, who: &Address) {
+    let auths = s.env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(&auths[0].0, who);
+}
+
+#[test]
+fn set_config_cannot_change_the_admin() {
+    let s = setup();
+    let mut config = s.factory.config();
+    config.admin = Address::generate(&s.env);
+    assert_err(
+        s.factory.try_set_config(&config),
+        Error::AdminChangeRequiresTransfer,
+    );
+    assert_eq!(s.factory.config().admin, s.admin);
+}
+
+#[test]
+fn admin_transfer_takes_effect_only_on_acceptance() {
+    let s = setup();
+    let next = Address::generate(&s.env);
+
+    s.factory.propose_admin(&next);
+    assert_signed_by(&s, &s.admin);
+    assert_eq!(s.factory.config().admin, s.admin);
+    assert_eq!(s.factory.pending_admin(), Some(next.clone()));
+
+    s.factory.accept_admin();
+    assert_signed_by(&s, &next);
+    assert_eq!(s.factory.config().admin, next);
+    assert_eq!(s.factory.pending_admin(), None);
+
+    // The new admin now signs configuration changes.
+    s.factory.allow_token(&Address::generate(&s.env), &true);
+    assert_signed_by(&s, &next);
+}
+
+#[test]
+fn accept_without_a_proposal_is_rejected() {
+    let s = setup();
+    assert_err(s.factory.try_accept_admin(), Error::NoPendingAdmin);
+    assert_err(s.factory.try_cancel_admin_transfer(), Error::NoPendingAdmin);
+}
+
+#[test]
+fn proposals_can_be_replaced_and_withdrawn() {
+    let s = setup();
+    let (first, second) = (Address::generate(&s.env), Address::generate(&s.env));
+    s.factory.propose_admin(&first);
+    s.factory.propose_admin(&second);
+    assert_eq!(s.factory.pending_admin(), Some(second));
+
+    s.factory.cancel_admin_transfer();
+    assert_signed_by(&s, &s.admin);
+    assert_eq!(s.factory.pending_admin(), None);
+    assert_err(s.factory.try_accept_admin(), Error::NoPendingAdmin);
+    assert_eq!(s.factory.config().admin, s.admin);
+}
+
+#[test]
+fn admin_transfer_emits_proposed_then_transferred() {
+    let s = setup();
+    let next = Address::generate(&s.env);
+
+    s.factory.propose_admin(&next);
+    let proposed = AdminProposed {
+        current: s.admin.clone(),
+        proposed: next.clone(),
+    };
+    assert_eq!(
+        s.events_of(&s.factory.address),
+        std::vec![s.event(&proposed)]
+    );
+
+    s.factory.accept_admin();
+    let transferred = AdminTransferred {
+        previous: s.admin.clone(),
+        admin: next,
+    };
+    assert_eq!(
+        s.events_of(&s.factory.address),
+        std::vec![s.event(&transferred)]
+    );
+}
