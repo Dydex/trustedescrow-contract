@@ -9,8 +9,10 @@
 //! brute force is its entropy. Every client that generates or accepts codes
 //! (the SDK, wallets, a CLI) must produce exactly the bytes this crate does.
 
+mod hash;
 mod normalise;
 
+pub use hash::release_code_hash;
 pub use normalise::{is_canonical, normalise, CodeError};
 
 /// Crockford base32: digits and uppercase letters without I, L, O and U.

@@ -1894,12 +1894,16 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "trustescrow-code"
 version = "0.1.0"
+dependencies = [
+ "sha2",
+]
 
 [[package]]
 name = "trustescrow-escrow"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "trustescrow-code",
  "trustescrow-types",
 ]
 
