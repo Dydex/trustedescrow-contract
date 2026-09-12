@@ -3,9 +3,9 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Bytes, BytesN, Env, String,
+    Bytes, BytesN, Env, IntoVal, String,
 };
 
 const AMOUNT: i128 = 1_000_000_000;
@@ -153,6 +153,14 @@ impl Setup<'_> {
         assert_eq!(self.balance(&self.seller), AMOUNT - fee);
         assert_eq!(self.balance(&self.fee_recipient), fee);
         assert_eq!(self.balance(&self.buyer), 0);
+        assert_eq!(self.balance(&self.escrow.address), 0);
+    }
+
+    fn assert_buyer_refunded(&self) {
+        assert_eq!(self.state(), State::Refunded);
+        assert_eq!(self.balance(&self.buyer), AMOUNT);
+        assert_eq!(self.balance(&self.seller), 0);
+        assert_eq!(self.balance(&self.fee_recipient), 0);
         assert_eq!(self.balance(&self.escrow.address), 0);
     }
 }
@@ -598,4 +606,88 @@ fn stranger_cannot_dispute() {
     let s = setup().delivered();
     let stranger = Address::generate(&s.env);
     assert_err(s.escrow.try_dispute(&stranger), Error::NotParticipant);
+}
+
+// --- Arbitration -------------------------------------------------------------
+
+#[test]
+fn arbitrator_can_release() {
+    let s = setup().delivered();
+    s.escrow.dispute(&s.buyer);
+    s.escrow.resolve(&Outcome::Release);
+    s.assert_only_auth(&s.arbitrator);
+    s.assert_seller_paid();
+    assert_eq!(s.get().released_via(), Some(ReleasePath::Arbitration));
+}
+
+#[test]
+fn arbitrator_refund_returns_full_amount_without_fee() {
+    let s = setup().delivered();
+    s.escrow.dispute(&s.seller);
+    s.escrow.resolve(&Outcome::Refund);
+    s.assert_buyer_refunded();
+    assert_eq!(s.get().refunded_via(), Some(RefundPath::Arbitration));
+}
+
+#[test]
+fn only_the_arbitrator_can_resolve() {
+    let s = setup().delivered();
+    s.escrow.dispute(&s.buyer);
+    for impostor in [&s.buyer, &s.seller] {
+        s.env.mock_auths(&[MockAuth {
+            address: impostor,
+            invoke: &MockAuthInvoke {
+                contract: &s.escrow.address,
+                fn_name: "resolve",
+                args: (Outcome::Release,).into_val(&s.env),
+                sub_invokes: &[],
+            },
+        }]);
+        assert!(s.escrow.try_resolve(&Outcome::Release).is_err());
+    }
+    s.env.mock_all_auths();
+    assert_eq!(s.state(), State::Disputed);
+    assert_eq!(s.balance(&s.escrow.address), AMOUNT);
+}
+
+#[test]
+fn arbitration_deadline_refunds_buyer() {
+    let s = setup().delivered();
+    s.escrow.dispute(&s.buyer);
+    let deadline = s.get().dispute().unwrap().deadline;
+
+    s.at(deadline - 1);
+    assert_err(
+        s.escrow.try_refund_after_arbitration_timeout(),
+        Error::DeadlineNotReached,
+    );
+
+    s.at(deadline);
+    assert_err(
+        s.escrow.try_resolve(&Outcome::Release),
+        Error::DeadlinePassed,
+    );
+    s.escrow.refund_after_arbitration_timeout();
+    assert!(s.env.auths().is_empty());
+    s.assert_buyer_refunded();
+    assert_eq!(s.get().refunded_via(), Some(RefundPath::ArbitrationTimeout));
+}
+
+#[test]
+fn resolve_twice_is_rejected() {
+    let s = setup().delivered();
+    s.escrow.dispute(&s.buyer);
+    s.escrow.resolve(&Outcome::Release);
+    assert_err(s.escrow.try_resolve(&Outcome::Refund), Error::InvalidState);
+    s.assert_seller_paid();
+}
+
+#[test]
+fn resolve_outside_dispute_is_rejected() {
+    let s = setup().delivered();
+    assert_err(s.escrow.try_resolve(&Outcome::Release), Error::InvalidState);
+    assert_err(
+        s.escrow.try_refund_after_arbitration_timeout(),
+        Error::InvalidState,
+    );
 }

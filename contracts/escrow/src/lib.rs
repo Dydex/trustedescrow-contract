@@ -91,6 +91,13 @@ pub struct Released {
     pub fee: i128,
 }
 
+#[contractevent(topics = ["refunded"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Refunded {
+    pub path: RefundPath,
+    pub amount: i128,
+}
+
 #[contractevent(topics = ["cancelled"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cancelled {
@@ -340,6 +347,30 @@ impl EscrowContract {
         open_dispute(&env, e, DisputeOrigin::ReceiptTimeout);
     }
 
+    /// Arbitrator chooses one of two outcomes, before the arbitration deadline.
+    pub fn resolve(env: Env, outcome: Outcome) {
+        let e = load(&env);
+        let deadline = dispute_deadline(&env, &e);
+        e.arbitrator.require_auth();
+        if now(&env) >= deadline {
+            panic_with_error!(&env, Error::DeadlinePassed);
+        }
+        match outcome {
+            Outcome::Release => release(&env, e, ReleasePath::Arbitration),
+            Outcome::Refund => refund(&env, e, RefundPath::Arbitration),
+        }
+    }
+
+    /// The arbitrator never ruled. Anyone may refund the buyer.
+    pub fn refund_after_arbitration_timeout(env: Env) {
+        let e = load(&env);
+        let deadline = dispute_deadline(&env, &e);
+        if now(&env) < deadline {
+            panic_with_error!(&env, Error::DeadlineNotReached);
+        }
+        refund(&env, e, RefundPath::ArbitrationTimeout);
+    }
+
     pub fn get(env: Env) -> Escrow {
         load(&env)
     }
@@ -377,6 +408,13 @@ fn extend_ttl(env: &Env) {
 fn require_state(env: &Env, e: &Escrow, state: State) {
     if e.state != state {
         panic_with_error!(env, Error::InvalidState);
+    }
+}
+
+fn dispute_deadline(env: &Env, e: &Escrow) -> u64 {
+    match (&e.state, &e.dispute) {
+        (State::Disputed, DisputeRecord::Opened(d)) => d.deadline,
+        _ => panic_with_error!(env, Error::InvalidState),
     }
 }
 
@@ -448,6 +486,23 @@ fn release(env: &Env, mut e: Escrow, path: ReleasePath) {
         token.transfer(&this, &e.fee_recipient, &fee);
     }
     Released { path, payout, fee }.publish(env);
+}
+
+fn refund(env: &Env, mut e: Escrow, path: RefundPath) {
+    e.state = State::Refunded;
+    e.settlement = Settlement::Refunded(path);
+    save(env, &e);
+
+    token::TokenClient::new(env, &e.token).transfer(
+        &env.current_contract_address(),
+        &e.buyer,
+        &e.amount,
+    );
+    Refunded {
+        path,
+        amount: e.amount,
+    }
+    .publish(env);
 }
 
 #[cfg(test)]
