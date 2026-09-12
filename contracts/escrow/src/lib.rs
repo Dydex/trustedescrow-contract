@@ -381,6 +381,17 @@ impl EscrowContract {
         refund(&env, e, RefundPath::ArbitrationTimeout);
     }
 
+    /// Seller returns the funds voluntarily. Only ever benefits the buyer.
+    pub fn seller_refund(env: Env) {
+        let e = load(&env);
+        match e.state {
+            State::Funded | State::Delivered | State::Disputed => {}
+            _ => panic_with_error!(&env, Error::InvalidState),
+        }
+        e.seller.require_auth();
+        refund(&env, e, RefundPath::SellerRefund);
+    }
+
     pub fn get(env: Env) -> Escrow {
         load(&env)
     }

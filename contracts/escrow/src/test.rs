@@ -608,6 +608,31 @@ fn stranger_cannot_dispute() {
     assert_err(s.escrow.try_dispute(&stranger), Error::NotParticipant);
 }
 
+// --- Seller refund -----------------------------------------------------------
+
+#[test]
+fn seller_can_refund_from_any_open_state() {
+    for stage in 0..3 {
+        let s = setup().funded();
+        if stage >= 1 {
+            s.deliver();
+        }
+        if stage == 2 {
+            s.escrow.dispute(&s.buyer);
+        }
+        s.escrow.seller_refund();
+        s.assert_only_auth(&s.seller);
+        s.assert_buyer_refunded();
+        assert_eq!(s.get().refunded_via(), Some(RefundPath::SellerRefund));
+    }
+}
+
+#[test]
+fn seller_cannot_refund_an_unfunded_escrow() {
+    let s = setup();
+    assert_err(s.escrow.try_seller_refund(), Error::InvalidState);
+}
+
 // --- Delivery timeout --------------------------------------------------------
 
 #[test]
