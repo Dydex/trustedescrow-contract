@@ -3,7 +3,7 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{storage::Instance as _, Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
     xdr::ContractEvent,
     Bytes, BytesN, Env, Event, IntoVal, String,
@@ -815,6 +815,48 @@ fn confirmation_and_escalation_race_at_receipt_deadline() {
     escalated.escrow.escalate();
     assert_err(escalated.escrow.try_confirm(), Error::InvalidState);
     assert_eq!(escalated.state(), State::Disputed);
+}
+
+// --- Storage TTL -------------------------------------------------------------
+//
+// An archived escrow cannot be touched until restored, which for users looks
+// like frozen funds. Every state change, and the public bump, must push the
+// instance TTL back to full.
+
+impl Setup<'_> {
+    fn ttl(&self) -> u32 {
+        self.env.as_contract(&self.escrow.address, || {
+            self.env.storage().instance().get_ttl()
+        })
+    }
+
+    fn advance_ledgers(&self, ledgers: u32) {
+        let sequence = self.env.ledger().sequence();
+        self.env.ledger().set_sequence_number(sequence + ledgers);
+    }
+}
+
+#[test]
+fn state_changes_and_bump_restore_the_full_ttl() {
+    // Fund before advancing, so the buyer's token balance cannot expire.
+    let s = setup().funded();
+    let full = s.ttl();
+    let max_ttl = s
+        .env
+        .as_contract(&s.escrow.address, || s.env.storage().max_ttl());
+    assert_eq!(full, TTL_EXTEND_TO.min(max_ttl));
+
+    // Let most of the TTL run down, then change state.
+    s.advance_ledgers(full - 10);
+    assert_eq!(s.ttl(), 10);
+    s.deliver();
+    assert_eq!(s.ttl(), full);
+
+    // An idle escrow is kept alive by the permissionless bump.
+    s.advance_ledgers(full - 10);
+    assert_eq!(s.ttl(), 10);
+    s.escrow.bump();
+    assert_eq!(s.ttl(), full);
 }
 
 // --- Terminality -------------------------------------------------------------
