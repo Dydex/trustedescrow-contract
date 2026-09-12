@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "contracts/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+soroban-sdk = "27.0.6"
+trustescrow-types = { path = "crates/types" }
+
+# Soroban contracts are billed by deployed WASM size and CPU instructions, so the
+# release profile optimises for size. `overflow-checks` stays on: an arithmetic
+# wrap in a contract that moves money is a vulnerability, not a trade-off.
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true
