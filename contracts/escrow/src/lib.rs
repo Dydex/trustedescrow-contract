@@ -7,7 +7,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, token,
-    Address, BytesN, Env, String,
+    Address, Bytes, BytesN, Env, String,
 };
 
 pub use trustescrow_types::{
@@ -19,6 +19,7 @@ pub const MAX_URI_LEN: u32 = 256;
 pub const MIN_WINDOW: u64 = 60 * 60;
 pub const MAX_WINDOW: u64 = 365 * 24 * 60 * 60;
 
+const BPS_DENOMINATOR: i128 = 10_000;
 const ALLOWED_SCHEMES: [&[u8]; 3] = [b"https://", b"ipfs://", b"ar://"];
 
 const DAY_IN_LEDGERS: u32 = 17_280;
@@ -73,6 +74,14 @@ pub struct ProofSubmitted {
     pub kind: ProofKind,
     pub hash: BytesN<32>,
     pub receipt_deadline: u64,
+}
+
+#[contractevent(topics = ["released"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Released {
+    pub path: ReleasePath,
+    pub payout: i128,
+    pub fee: i128,
 }
 
 #[contractevent(topics = ["cancelled"])]
@@ -225,6 +234,19 @@ impl EscrowContract {
         .publish(&env);
     }
 
+    /// Release on the buyer's delivery code. Callable by anyone holding it, but
+    /// only once the seller's proof is on-chain.
+    pub fn release_with_code(env: Env, code: Bytes) {
+        let e = load(&env);
+        match e.state {
+            State::Delivered => {}
+            State::Funded => panic_with_error!(&env, Error::ProofRequired),
+            _ => panic_with_error!(&env, Error::InvalidState),
+        }
+        verify_code(&env, &e, &code);
+        release(&env, e, ReleasePath::Code);
+    }
+
     pub fn get(env: Env) -> Escrow {
         load(&env)
     }
@@ -265,6 +287,13 @@ fn require_state(env: &Env, e: &Escrow, state: State) {
     }
 }
 
+fn verify_code(env: &Env, e: &Escrow, code: &Bytes) {
+    let hash: BytesN<32> = env.crypto().sha256(code).into();
+    if hash != e.release_code_hash {
+        panic_with_error!(env, Error::InvalidCode);
+    }
+}
+
 fn validate_uri(env: &Env, kind: ProofKind, uri: &String) {
     let len = uri.len();
     if len == 0 {
@@ -287,6 +316,27 @@ fn validate_uri(env: &Env, kind: ProofKind, uri: &String) {
     if !printable || !has_scheme {
         panic_with_error!(env, Error::InvalidUri);
     }
+}
+
+fn release(env: &Env, mut e: Escrow, path: ReleasePath) {
+    let fee = e
+        .amount
+        .checked_mul(e.fee_bps as i128)
+        .unwrap_or_else(|| panic_with_error!(env, Error::Overflow))
+        / BPS_DENOMINATOR;
+    let payout = e.amount - fee;
+
+    e.state = State::Released;
+    e.settlement = Settlement::Released(path);
+    save(env, &e);
+
+    let token = token::TokenClient::new(env, &e.token);
+    let this = env.current_contract_address();
+    token.transfer(&this, &e.seller, &payout);
+    if fee > 0 {
+        token.transfer(&this, &e.fee_recipient, &fee);
+    }
+    Released { path, payout, fee }.publish(env);
 }
 
 #[cfg(test)]

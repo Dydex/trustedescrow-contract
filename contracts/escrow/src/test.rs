@@ -16,6 +16,7 @@ const DELIVERY_WINDOW: u64 = 7 * DAY;
 const RECEIPT_WINDOW: u64 = 3 * DAY;
 const ARBITRATION_WINDOW: u64 = 30 * DAY;
 const CODE: &[u8] = b"K7M29XQF4TBNR3WD";
+const ONE_BYTE_OFF: &[u8] = b"K7M29XQF4TBNR3WE";
 const TRACKING_URI: &str = "https://track.example/ABC123";
 
 struct Setup<'a> {
@@ -108,6 +109,14 @@ impl Setup<'_> {
         self.token.balance(who)
     }
 
+    fn code(&self) -> Bytes {
+        Bytes::from_slice(&self.env, CODE)
+    }
+
+    fn wrong_code(&self) -> Bytes {
+        Bytes::from_slice(&self.env, ONE_BYTE_OFF)
+    }
+
     fn uri(&self, s: &str) -> String {
         String::from_str(&self.env, s)
     }
@@ -136,6 +145,15 @@ impl Setup<'_> {
         let auths = self.env.auths();
         assert_eq!(auths.len(), 1, "expected exactly one signer, got {auths:?}");
         assert_eq!(&auths[0].0, who);
+    }
+
+    fn assert_seller_paid(&self) {
+        let fee = AMOUNT * FEE_BPS as i128 / 10_000;
+        assert_eq!(self.state(), State::Released);
+        assert_eq!(self.balance(&self.seller), AMOUNT - fee);
+        assert_eq!(self.balance(&self.fee_recipient), fee);
+        assert_eq!(self.balance(&self.buyer), 0);
+        assert_eq!(self.balance(&self.escrow.address), 0);
     }
 }
 
@@ -373,5 +391,70 @@ fn valid_proof_uris_are_accepted() {
         let s = setup().funded();
         s.escrow.submit_proof(&kind, &s.uri(uri), &s.hash());
         assert_eq!(s.get().proof().unwrap().uri, s.uri(uri));
+    }
+}
+
+// --- Release on the buyer's code ---------------------------------------------
+
+#[test]
+fn code_after_proof_releases_to_seller_minus_fee() {
+    let s = setup().delivered();
+    s.escrow.release_with_code(&s.code());
+    s.assert_seller_paid();
+    assert_eq!(s.get().released_via(), Some(ReleasePath::Code));
+}
+
+#[test]
+fn code_release_needs_no_signature() {
+    let s = setup().delivered();
+    s.escrow.release_with_code(&s.code());
+    assert!(s.env.auths().is_empty());
+}
+
+#[test]
+fn code_is_rejected_before_seller_proof() {
+    let s = setup().funded();
+    assert_err(
+        s.escrow.try_release_with_code(&s.code()),
+        Error::ProofRequired,
+    );
+    assert_eq!(s.state(), State::Funded);
+}
+
+#[test]
+fn one_byte_off_code_is_rejected() {
+    let s = setup().delivered();
+    assert_err(
+        s.escrow.try_release_with_code(&s.wrong_code()),
+        Error::InvalidCode,
+    );
+    assert_eq!(s.state(), State::Delivered);
+    assert_eq!(s.balance(&s.escrow.address), AMOUNT);
+}
+
+#[test]
+fn buyer_can_give_receipt_after_receipt_deadline() {
+    let s = setup().delivered();
+    s.at(s.get().receipt_deadline + DAY);
+    s.escrow.release_with_code(&s.code());
+    s.assert_seller_paid();
+}
+
+#[test]
+fn release_conserves_amount_for_any_fee() {
+    for fee_bps in [0, 1, 150, 999, MAX_FEE_BPS] {
+        for amount in [1i128, 7, 9_999, 10_001, 1_000_000_007] {
+            let env = new_env();
+            let mut params = default_params(&env);
+            params.fee_bps = fee_bps;
+            params.order.amount = amount;
+            let s = setup_from(env, params).delivered();
+            s.escrow.release_with_code(&s.code());
+
+            let fee = s.balance(&s.fee_recipient);
+            assert_eq!(fee, amount * fee_bps as i128 / 10_000);
+            assert_eq!(s.balance(&s.seller) + fee, amount);
+            assert_eq!(s.balance(&s.escrow.address), 0);
+        }
     }
 }
