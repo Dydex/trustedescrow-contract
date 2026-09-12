@@ -524,3 +524,78 @@ fn proof_with_code_is_accepted_after_delivery_deadline() {
         .submit_proof_with_code(&ProofKind::Attestation, &s.uri(""), &s.hash(), &s.code());
     s.assert_seller_paid();
 }
+
+// --- Disputes and the silent buyer -------------------------------------------
+
+#[test]
+fn silent_buyer_escalates_instead_of_paying_seller() {
+    let s = setup().delivered();
+    let receipt_deadline = s.get().receipt_deadline;
+    assert_eq!(receipt_deadline, START + RECEIPT_WINDOW);
+
+    s.at(receipt_deadline - 1);
+    assert_err(s.escrow.try_escalate(), Error::DeadlineNotReached);
+
+    s.at(receipt_deadline);
+    s.escrow.escalate();
+    assert!(s.env.auths().is_empty());
+
+    let e = s.get();
+    assert_eq!(e.state, State::Disputed);
+    let dispute = e.dispute().unwrap();
+    assert_eq!(dispute.opened_by, DisputeOrigin::ReceiptTimeout);
+    assert_eq!(dispute.from_state, State::Delivered);
+    assert_eq!(dispute.deadline, receipt_deadline + ARBITRATION_WINDOW);
+    assert_eq!(s.balance(&s.seller), 0);
+    assert_eq!(s.balance(&s.escrow.address), AMOUNT);
+}
+
+#[test]
+fn code_is_not_an_automatic_release_once_disputed() {
+    let s = setup().delivered();
+    s.escrow.dispute(&s.buyer);
+    assert_err(
+        s.escrow.try_release_with_code(&s.code()),
+        Error::InvalidState,
+    );
+    assert_err(s.escrow.try_confirm(), Error::InvalidState);
+    assert_eq!(s.state(), State::Disputed);
+}
+
+#[test]
+fn escalate_then_dispute_in_same_ledger() {
+    let s = setup().delivered();
+    s.at(s.get().receipt_deadline);
+    s.escrow.escalate();
+    assert_err(s.escrow.try_dispute(&s.buyer), Error::InvalidState);
+    assert_eq!(
+        s.get().dispute().unwrap().opened_by,
+        DisputeOrigin::ReceiptTimeout
+    );
+}
+
+#[test]
+fn dispute_then_escalate_in_same_ledger() {
+    let s = setup().delivered();
+    s.at(s.get().receipt_deadline);
+    s.escrow.dispute(&s.seller);
+    assert_err(s.escrow.try_escalate(), Error::InvalidState);
+    assert_eq!(s.get().dispute().unwrap().opened_by, DisputeOrigin::Seller);
+}
+
+#[test]
+fn either_party_can_dispute_from_funded_before_delivery_deadline() {
+    let s = setup().funded();
+    s.escrow.dispute(&s.seller);
+    s.assert_only_auth(&s.seller);
+    let dispute = s.get().dispute().unwrap();
+    assert_eq!(dispute.opened_by, DisputeOrigin::Seller);
+    assert_eq!(dispute.from_state, State::Funded);
+}
+
+#[test]
+fn stranger_cannot_dispute() {
+    let s = setup().delivered();
+    let stranger = Address::generate(&s.env);
+    assert_err(s.escrow.try_dispute(&stranger), Error::NotParticipant);
+}

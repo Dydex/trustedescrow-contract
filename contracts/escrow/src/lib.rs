@@ -76,6 +76,13 @@ pub struct ProofSubmitted {
     pub receipt_deadline: u64,
 }
 
+#[contractevent(topics = ["disputed"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Disputed {
+    pub opened_by: DisputeOrigin,
+    pub deadline: u64,
+}
+
 #[contractevent(topics = ["released"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Released {
@@ -296,6 +303,43 @@ impl EscrowContract {
         release(&env, e, ReleasePath::Confirmation);
     }
 
+    /// Either party hands the escrow to the arbitrator. From `Funded` this is
+    /// closed once `delivery_deadline` passes, so a seller cannot block the
+    /// buyer's refund.
+    pub fn dispute(env: Env, caller: Address) {
+        caller.require_auth();
+        let e = load(&env);
+        let origin = if caller == e.buyer {
+            DisputeOrigin::Buyer
+        } else if caller == e.seller {
+            DisputeOrigin::Seller
+        } else {
+            panic_with_error!(&env, Error::NotParticipant)
+        };
+        match e.state {
+            State::Funded => {
+                if now(&env) >= e.delivery_deadline {
+                    panic_with_error!(&env, Error::DeadlinePassed);
+                }
+            }
+            State::Delivered => {}
+            _ => panic_with_error!(&env, Error::InvalidState),
+        }
+        open_dispute(&env, e, origin);
+    }
+
+    /// The buyer gave neither receipt nor objection by `receipt_deadline`.
+    /// Anyone may hand the escrow to the arbitrator. This is the path that
+    /// replaces paying the seller on a timeout.
+    pub fn escalate(env: Env) {
+        let e = load(&env);
+        require_state(&env, &e, State::Delivered);
+        if now(&env) < e.receipt_deadline {
+            panic_with_error!(&env, Error::DeadlineNotReached);
+        }
+        open_dispute(&env, e, DisputeOrigin::ReceiptTimeout);
+    }
+
     pub fn get(env: Env) -> Escrow {
         load(&env)
     }
@@ -365,6 +409,24 @@ fn validate_uri(env: &Env, kind: ProofKind, uri: &String) {
     if !printable || !has_scheme {
         panic_with_error!(env, Error::InvalidUri);
     }
+}
+
+fn open_dispute(env: &Env, mut e: Escrow, origin: DisputeOrigin) {
+    let now = now(env);
+    let deadline = add(env, now, e.arbitration_window);
+    e.dispute = DisputeRecord::Opened(Dispute {
+        opened_by: origin,
+        opened_at: now,
+        from_state: e.state,
+        deadline,
+    });
+    e.state = State::Disputed;
+    save(env, &e);
+    Disputed {
+        opened_by: origin,
+        deadline,
+    }
+    .publish(env);
 }
 
 fn release(env: &Env, mut e: Escrow, path: ReleasePath) {
