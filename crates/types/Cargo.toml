@@ -1,0 +1,21 @@
+[package]
+name = "trustescrow-types"
+description = "Types shared by the TrustEscrow escrow and factory contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+# No cdylib: this crate defines types and no contract, so both contracts can
+# depend on it without colliding at link time.
+crate-type = ["lib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+# `#[contracttype]` only emits the XDR conversions that tests rely on (including
+# those for `Option<Proof>` and friends) when the defining crate has this feature.
+[features]
+testutils = ["soroban-sdk/testutils"]
