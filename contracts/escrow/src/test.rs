@@ -78,13 +78,44 @@ fn setup<'a>() -> Setup<'a> {
     setup_from(env, params)
 }
 
+/// Entry points panic with a contract error rather than returning `Result`, so
+/// the generated `try_` client surfaces it as a generic `soroban_sdk::Error`.
+fn assert_err<T: core::fmt::Debug, E: core::fmt::Debug>(
+    result: Result<T, Result<soroban_sdk::Error, E>>,
+    expected: Error,
+) {
+    match result {
+        Err(Ok(got)) => assert_eq!(got, soroban_sdk::Error::from(expected)),
+        other => panic!("expected {expected:?}, got {other:?}"),
+    }
+}
+
 impl Setup<'_> {
+    fn at(&self, timestamp: u64) {
+        self.env.ledger().set_timestamp(timestamp);
+    }
+
     fn get(&self) -> Escrow {
         self.escrow.get()
     }
 
+    fn state(&self) -> State {
+        self.get().state
+    }
+
     fn balance(&self, who: &Address) -> i128 {
         self.token.balance(who)
+    }
+
+    fn funded(self) -> Self {
+        self.escrow.fund();
+        self
+    }
+
+    fn assert_only_auth(&self, who: &Address) {
+        let auths = self.env.auths();
+        assert_eq!(auths.len(), 1, "expected exactly one signer, got {auths:?}");
+        assert_eq!(&auths[0].0, who);
     }
 }
 
@@ -106,7 +137,10 @@ fn constructor_records_order_and_operator_config() {
     assert_eq!(e.delivery_window, DELIVERY_WINDOW);
     assert_eq!(e.receipt_window, RECEIPT_WINDOW);
     assert_eq!(e.arbitration_window, ARBITRATION_WINDOW);
-    assert_eq!((e.funded_at, e.delivery_deadline, e.receipt_deadline), (0, 0, 0));
+    assert_eq!(
+        (e.funded_at, e.delivery_deadline, e.receipt_deadline),
+        (0, 0, 0)
+    );
     assert!(e.proof().is_none());
     assert!(e.dispute().is_none());
     assert_eq!(e.settlement, Settlement::Open);
@@ -162,4 +196,63 @@ fn windows_have_a_minimum() {
 #[should_panic(expected = "Error(Contract, #11)")]
 fn funding_deadline_must_be_in_the_future() {
     register_with(|p| p.order.funding_deadline = START);
+}
+
+// --- Funding and cancellation ------------------------------------------------
+
+#[test]
+fn fund_moves_tokens_and_starts_delivery_window() {
+    let s = setup();
+    s.escrow.fund();
+    s.assert_only_auth(&s.buyer);
+    let e = s.get();
+    assert_eq!(e.state, State::Funded);
+    assert_eq!(e.funded_at, START);
+    assert_eq!(e.delivery_deadline, START + DELIVERY_WINDOW);
+    assert_eq!(s.balance(&s.buyer), 0);
+    assert_eq!(s.balance(&s.escrow.address), AMOUNT);
+}
+
+#[test]
+fn fund_twice_is_rejected() {
+    let s = setup().funded();
+    assert_err(s.escrow.try_fund(), Error::InvalidState);
+}
+
+#[test]
+fn fund_is_rejected_at_funding_deadline() {
+    let s = setup();
+    s.at(START + DAY);
+    assert_err(s.escrow.try_fund(), Error::DeadlinePassed);
+}
+
+#[test]
+fn either_party_can_cancel_before_funding() {
+    for party in [0, 1] {
+        let s = setup();
+        let who = if party == 0 {
+            s.buyer.clone()
+        } else {
+            s.seller.clone()
+        };
+        s.escrow.cancel(&who);
+        assert_eq!(s.state(), State::Cancelled);
+    }
+}
+
+#[test]
+fn stranger_can_cancel_only_after_funding_deadline() {
+    let s = setup();
+    let stranger = Address::generate(&s.env);
+    s.at(START + DAY - 1);
+    assert_err(s.escrow.try_cancel(&stranger), Error::NotParticipant);
+    s.at(START + DAY);
+    s.escrow.cancel(&stranger);
+    assert_eq!(s.state(), State::Cancelled);
+}
+
+#[test]
+fn funded_escrow_cannot_be_cancelled() {
+    let s = setup().funded();
+    assert_err(s.escrow.try_cancel(&s.buyer), Error::InvalidState);
 }

@@ -6,8 +6,8 @@
 //! No timeout pays the seller.
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, Address,
-    Env,
+    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, token,
+    Address, Env,
 };
 
 pub use trustescrow_types::{
@@ -56,6 +56,19 @@ pub struct Created {
     pub seller: Address,
     pub token: Address,
     pub amount: i128,
+}
+
+#[contractevent(topics = ["funded"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Funded {
+    pub amount: i128,
+    pub delivery_deadline: u64,
+}
+
+#[contractevent(topics = ["cancelled"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Cancelled {
+    pub by: Address,
 }
 
 #[contract]
@@ -126,6 +139,49 @@ impl EscrowContract {
         .publish(&env);
     }
 
+    /// Buyer deposits `amount`. Starts the delivery window.
+    pub fn fund(env: Env) {
+        let mut e = load(&env);
+        require_state(&env, &e, State::Created);
+        let now = now(&env);
+        if now >= e.funding_deadline {
+            panic_with_error!(&env, Error::DeadlinePassed);
+        }
+        e.buyer.require_auth();
+
+        e.state = State::Funded;
+        e.funded_at = now;
+        e.delivery_deadline = add(&env, now, e.delivery_window);
+        save(&env, &e);
+
+        token::TokenClient::new(&env, &e.token).transfer(
+            &e.buyer,
+            env.current_contract_address(),
+            &e.amount,
+        );
+        Funded {
+            amount: e.amount,
+            delivery_deadline: e.delivery_deadline,
+        }
+        .publish(&env);
+    }
+
+    /// Abandon an unfunded escrow. Either party may cancel before
+    /// `funding_deadline`; anyone may after it. No funds are held.
+    pub fn cancel(env: Env, caller: Address) {
+        caller.require_auth();
+        let mut e = load(&env);
+        require_state(&env, &e, State::Created);
+        let is_party = caller == e.buyer || caller == e.seller;
+        if !is_party && now(&env) < e.funding_deadline {
+            panic_with_error!(&env, Error::NotParticipant);
+        }
+
+        e.state = State::Cancelled;
+        save(&env, &e);
+        Cancelled { by: caller }.publish(&env);
+    }
+
     pub fn get(env: Env) -> Escrow {
         load(&env)
     }
@@ -158,6 +214,12 @@ fn extend_ttl(env: &Env) {
     let extend_to = TTL_EXTEND_TO.min(env.storage().max_ttl());
     let threshold = TTL_THRESHOLD.min(extend_to);
     env.storage().instance().extend_ttl(threshold, extend_to);
+}
+
+fn require_state(env: &Env, e: &Escrow, state: State) {
+    if e.state != state {
+        panic_with_error!(env, Error::InvalidState);
+    }
 }
 
 #[cfg(test)]
