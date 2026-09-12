@@ -283,6 +283,19 @@ impl EscrowContract {
         release(&env, e, ReleasePath::Code);
     }
 
+    /// Buyer confirms receipt with their own signature — the fallback for a
+    /// buyer who has lost their code.
+    pub fn confirm(env: Env) {
+        let e = load(&env);
+        match e.state {
+            State::Delivered => {}
+            State::Funded => panic_with_error!(&env, Error::ProofRequired),
+            _ => panic_with_error!(&env, Error::InvalidState),
+        }
+        e.buyer.require_auth();
+        release(&env, e, ReleasePath::Confirmation);
+    }
+
     pub fn get(env: Env) -> Escrow {
         load(&env)
     }

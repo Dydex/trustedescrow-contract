@@ -468,6 +468,23 @@ fn release_conserves_amount_for_any_fee() {
     }
 }
 
+// --- Buyer confirmation ------------------------------------------------------
+
+#[test]
+fn confirm_releases_after_proof() {
+    let s = setup().delivered();
+    s.escrow.confirm();
+    s.assert_only_auth(&s.buyer);
+    s.assert_seller_paid();
+    assert_eq!(s.get().released_via(), Some(ReleasePath::Confirmation));
+}
+
+#[test]
+fn confirm_is_rejected_before_seller_proof() {
+    let s = setup().funded();
+    assert_err(s.escrow.try_confirm(), Error::ProofRequired);
+}
+
 // --- In-person handover ------------------------------------------------------
 
 #[test]
