@@ -361,6 +361,16 @@ impl EscrowContract {
         }
     }
 
+    /// The seller never submitted proof. Anyone may refund the buyer.
+    pub fn refund_after_delivery_timeout(env: Env) {
+        let e = load(&env);
+        require_state(&env, &e, State::Funded);
+        if now(&env) < e.delivery_deadline {
+            panic_with_error!(&env, Error::DeadlineNotReached);
+        }
+        refund(&env, e, RefundPath::DeliveryTimeout);
+    }
+
     /// The arbitrator never ruled. Anyone may refund the buyer.
     pub fn refund_after_arbitration_timeout(env: Env) {
         let e = load(&env);

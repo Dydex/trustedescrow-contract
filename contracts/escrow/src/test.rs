@@ -608,6 +608,47 @@ fn stranger_cannot_dispute() {
     assert_err(s.escrow.try_dispute(&stranger), Error::NotParticipant);
 }
 
+// --- Delivery timeout --------------------------------------------------------
+
+#[test]
+fn undelivered_escrow_refunds_buyer_at_delivery_deadline() {
+    let s = setup().funded();
+    let deadline = s.get().delivery_deadline;
+    assert_eq!(deadline, START + DELIVERY_WINDOW);
+
+    s.at(deadline - 1);
+    assert_err(
+        s.escrow.try_refund_after_delivery_timeout(),
+        Error::DeadlineNotReached,
+    );
+
+    s.at(deadline);
+    s.escrow.refund_after_delivery_timeout();
+    assert!(s.env.auths().is_empty());
+    s.assert_buyer_refunded();
+    assert_eq!(s.get().refunded_via(), Some(RefundPath::DeliveryTimeout));
+}
+
+#[test]
+fn nobody_can_dispute_from_funded_after_delivery_deadline() {
+    let s = setup().funded();
+    s.at(s.get().delivery_deadline);
+    assert_err(s.escrow.try_dispute(&s.seller), Error::DeadlinePassed);
+    assert_err(s.escrow.try_dispute(&s.buyer), Error::DeadlinePassed);
+    s.escrow.refund_after_delivery_timeout();
+    s.assert_buyer_refunded();
+}
+
+#[test]
+fn delivered_escrow_has_no_delivery_timeout() {
+    let s = setup().delivered();
+    s.at(s.get().delivery_deadline + DAY);
+    assert_err(
+        s.escrow.try_refund_after_delivery_timeout(),
+        Error::InvalidState,
+    );
+}
+
 // --- Arbitration -------------------------------------------------------------
 
 #[test]
