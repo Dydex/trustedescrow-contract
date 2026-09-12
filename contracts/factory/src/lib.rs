@@ -178,3 +178,6 @@ fn extend_persistent_ttl(env: &Env, key: &DataKey) {
         .persistent()
         .extend_ttl(key, threshold, extend_to);
 }
+
+#[cfg(test)]
+mod test;
