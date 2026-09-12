@@ -528,3 +528,5 @@ fn refund(env: &Env, mut e: Escrow, path: RefundPath) {
 
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod test_invariants;
