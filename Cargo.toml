@@ -28,3 +28,10 @@ lto = true
 [profile.release-with-logs]
 inherits = "release"
 debug-assertions = true
+
+# The Soroban host is very slow unoptimised, and every test call runs through
+# it. Optimising dependencies (not this workspace's own crates, which keep
+# debug assertions and fast rebuilds) makes the test suite several times
+# faster at the cost of a slower first build.
+[profile.dev.package."*"]
+opt-level = 2
