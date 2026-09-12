@@ -1,0 +1,10 @@
+[package]
+name = "trustescrow-code"
+description = "Reference implementation of the TrustEscrow delivery code format"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
