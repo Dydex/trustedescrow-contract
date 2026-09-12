@@ -3,9 +3,10 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Bytes, BytesN, Env, IntoVal, String,
+    xdr::ContractEvent,
+    Bytes, BytesN, Env, Event, IntoVal, String,
 };
 
 const AMOUNT: i128 = 1_000_000_000;
@@ -197,6 +198,21 @@ impl Setup<'_> {
             Error::InvalidState,
         );
         assert_err(self.escrow.try_seller_refund(), Error::InvalidState);
+    }
+
+    /// The escrow's own events from the last invocation, in emission order.
+    /// Token transfer events from the asset contract are filtered out.
+    fn escrow_events(&self) -> std::vec::Vec<ContractEvent> {
+        self.env
+            .events()
+            .all()
+            .filter_by_contract(&self.escrow.address)
+            .events()
+            .to_vec()
+    }
+
+    fn event(&self, event: &impl Event) -> ContractEvent {
+        event.to_xdr(&self.env, &self.escrow.address)
     }
 }
 
@@ -641,6 +657,121 @@ fn stranger_cannot_dispute() {
     let s = setup().delivered();
     let stranger = Address::generate(&s.env);
     assert_err(s.escrow.try_dispute(&stranger), Error::NotParticipant);
+}
+
+// --- Events ------------------------------------------------------------------
+//
+// The indexer builds its escrow list from these, so each transition must emit
+// exactly one well-formed event (two for the in-person path) and a rejected
+// call must emit none.
+
+const FEE: i128 = AMOUNT * FEE_BPS as i128 / 10_000;
+
+#[test]
+fn construction_emits_created_with_both_parties() {
+    let s = setup();
+    let expected = Created {
+        buyer: s.buyer.clone(),
+        seller: s.seller.clone(),
+        token: s.token.address.clone(),
+        amount: AMOUNT,
+    };
+    assert_eq!(s.escrow_events(), std::vec![s.event(&expected)]);
+}
+
+#[test]
+fn fund_emits_funded() {
+    let s = setup().funded();
+    let expected = Funded {
+        amount: AMOUNT,
+        delivery_deadline: START + DELIVERY_WINDOW,
+    };
+    assert_eq!(s.escrow_events(), std::vec![s.event(&expected)]);
+}
+
+#[test]
+fn proof_emits_receipt_deadline() {
+    let s = setup().delivered();
+    let expected = ProofSubmitted {
+        kind: ProofKind::Tracking,
+        hash: s.hash(),
+        receipt_deadline: START + RECEIPT_WINDOW,
+    };
+    assert_eq!(s.escrow_events(), std::vec![s.event(&expected)]);
+}
+
+#[test]
+fn code_release_emits_released_with_fee_split() {
+    let s = setup().delivered();
+    s.escrow.release_with_code(&s.code());
+    let expected = Released {
+        path: ReleasePath::Code,
+        payout: AMOUNT - FEE,
+        fee: FEE,
+    };
+    assert_eq!(s.escrow_events(), std::vec![s.event(&expected)]);
+}
+
+#[test]
+fn proof_with_code_emits_proof_then_release() {
+    let s = setup().funded();
+    s.escrow
+        .submit_proof_with_code(&ProofKind::Attestation, &s.uri(""), &s.hash(), &s.code());
+    let proof = ProofSubmitted {
+        kind: ProofKind::Attestation,
+        hash: s.hash(),
+        receipt_deadline: START,
+    };
+    let release = Released {
+        path: ReleasePath::Code,
+        payout: AMOUNT - FEE,
+        fee: FEE,
+    };
+    assert_eq!(
+        s.escrow_events(),
+        std::vec![s.event(&proof), s.event(&release)]
+    );
+}
+
+#[test]
+fn escalation_emits_disputed_with_receipt_timeout_origin() {
+    let s = setup().delivered();
+    let receipt_deadline = s.get().receipt_deadline;
+    s.at(receipt_deadline);
+    s.escrow.escalate();
+    let expected = Disputed {
+        opened_by: DisputeOrigin::ReceiptTimeout,
+        deadline: receipt_deadline + ARBITRATION_WINDOW,
+    };
+    assert_eq!(s.escrow_events(), std::vec![s.event(&expected)]);
+}
+
+#[test]
+fn refund_emits_refunded_with_path_and_full_amount() {
+    let s = setup().funded();
+    s.escrow.seller_refund();
+    let expected = Refunded {
+        path: RefundPath::SellerRefund,
+        amount: AMOUNT,
+    };
+    assert_eq!(s.escrow_events(), std::vec![s.event(&expected)]);
+}
+
+#[test]
+fn cancel_emits_cancelled_with_caller() {
+    let s = setup();
+    s.escrow.cancel(&s.seller);
+    let expected = Cancelled {
+        by: s.seller.clone(),
+    };
+    assert_eq!(s.escrow_events(), std::vec![s.event(&expected)]);
+}
+
+#[test]
+fn rejected_call_emits_nothing() {
+    let s = setup().delivered();
+    assert!(s.escrow.try_release_with_code(&s.wrong_code()).is_err());
+    assert!(s.escrow_events().is_empty());
 }
 
 // --- Terminality -------------------------------------------------------------
