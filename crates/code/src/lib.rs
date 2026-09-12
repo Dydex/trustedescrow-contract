@@ -9,6 +9,10 @@
 //! brute force is its entropy. Every client that generates or accepts codes
 //! (the SDK, wallets, a CLI) must produce exactly the bytes this crate does.
 
+mod normalise;
+
+pub use normalise::{is_canonical, normalise, CodeError};
+
 /// Crockford base32: digits and uppercase letters without I, L, O and U.
 pub const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
