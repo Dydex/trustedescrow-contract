@@ -3,9 +3,10 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Bytes, BytesN, Env, String,
+    xdr::ContractEvent,
+    Bytes, BytesN, Env, Event, String,
 };
 
 mod escrow_wasm {
@@ -103,6 +104,20 @@ impl Setup<'_> {
 
     fn escrow(&self, address: &Address) -> escrow_wasm::Client<'_> {
         escrow_wasm::Client::new(&self.env, address)
+    }
+
+    /// Events emitted by `contract` during the last invocation, in order.
+    fn events_of(&self, contract: &Address) -> std::vec::Vec<ContractEvent> {
+        self.env
+            .events()
+            .all()
+            .filter_by_contract(contract)
+            .events()
+            .to_vec()
+    }
+
+    fn event(&self, event: &impl Event) -> ContractEvent {
+        event.to_xdr(&self.env, &self.factory.address)
     }
 }
 
@@ -240,4 +255,67 @@ fn admin_signs_allowlist_changes() {
     assert_eq!(auths.len(), 1);
     assert_eq!(auths[0].0, s.admin);
     assert!(s.factory.is_token_allowed(&token));
+}
+
+// --- Events ------------------------------------------------------------------
+
+#[test]
+fn create_emits_escrow_created_and_the_escrow_emits_its_own() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let order = s.order(&buyer);
+    let escrow = s.factory.create(&order, &s.salt(1));
+
+    let expected = EscrowCreated {
+        buyer,
+        seller: order.seller,
+        escrow: escrow.clone(),
+        token: s.token.clone(),
+        amount: AMOUNT,
+    };
+    assert_eq!(
+        s.events_of(&s.factory.address),
+        std::vec![s.event(&expected)]
+    );
+    // The new escrow's constructor publishes its own `created` event in the
+    // same invocation.
+    assert_eq!(s.events_of(&escrow).len(), 1);
+}
+
+#[test]
+fn set_config_emits_config_updated() {
+    let s = setup();
+    let mut config = s.factory.config();
+    config.fee_bps = 200;
+    s.factory.set_config(&config);
+    let expected = ConfigUpdated { config };
+    assert_eq!(
+        s.events_of(&s.factory.address),
+        std::vec![s.event(&expected)]
+    );
+}
+
+#[test]
+fn allowlist_changes_emit_token_allowed() {
+    let s = setup();
+    for allowed in [false, true] {
+        s.factory.allow_token(&s.token, &allowed);
+        let expected = TokenAllowed {
+            token: s.token.clone(),
+            allowed,
+        };
+        assert_eq!(
+            s.events_of(&s.factory.address),
+            std::vec![s.event(&expected)]
+        );
+    }
+}
+
+#[test]
+fn rejected_create_emits_nothing() {
+    let s = setup();
+    s.factory.allow_token(&s.token, &false);
+    let order = s.order(&Address::generate(&s.env));
+    assert!(s.factory.try_create(&order, &s.salt(1)).is_err());
+    assert!(s.events_of(&s.factory.address).is_empty());
 }
