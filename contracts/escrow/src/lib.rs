@@ -234,6 +234,42 @@ impl EscrowContract {
         .publish(&env);
     }
 
+    /// In-person handover: the seller records proof and presents the buyer's
+    /// code in one transaction. Accepted after `delivery_deadline` too — a
+    /// buyer who hands over the code has accepted late delivery.
+    pub fn submit_proof_with_code(
+        env: Env,
+        kind: ProofKind,
+        uri: String,
+        hash: BytesN<32>,
+        code: Bytes,
+    ) {
+        let mut e = load(&env);
+        if e.proof().is_some() {
+            panic_with_error!(&env, Error::ProofAlreadySubmitted);
+        }
+        require_state(&env, &e, State::Funded);
+        e.seller.require_auth();
+        validate_uri(&env, kind, &uri);
+        verify_code(&env, &e, &code);
+
+        let now = now(&env);
+        e.receipt_deadline = now;
+        e.proof = ProofRecord::Submitted(Proof {
+            kind,
+            uri,
+            hash: hash.clone(),
+            submitted_at: now,
+        });
+        ProofSubmitted {
+            kind,
+            hash,
+            receipt_deadline: now,
+        }
+        .publish(&env);
+        release(&env, e, ReleasePath::Code);
+    }
+
     /// Release on the buyer's delivery code. Callable by anyone holding it, but
     /// only once the seller's proof is on-chain.
     pub fn release_with_code(env: Env, code: Bytes) {

@@ -345,6 +345,15 @@ fn proof_is_single_shot() {
         ),
         Error::ProofAlreadySubmitted,
     );
+    assert_err(
+        s.escrow.try_submit_proof_with_code(
+            &ProofKind::Attestation,
+            &s.uri(""),
+            &s.hash(),
+            &s.code(),
+        ),
+        Error::ProofAlreadySubmitted,
+    );
     assert_eq!(s.get().proof, original);
 }
 
@@ -457,4 +466,44 @@ fn release_conserves_amount_for_any_fee() {
             assert_eq!(s.balance(&s.escrow.address), 0);
         }
     }
+}
+
+// --- In-person handover ------------------------------------------------------
+
+#[test]
+fn proof_with_code_releases_in_one_call() {
+    let s = setup().funded();
+    s.escrow
+        .submit_proof_with_code(&ProofKind::Attestation, &s.uri(""), &s.hash(), &s.code());
+    s.assert_only_auth(&s.seller);
+    s.assert_seller_paid();
+    let e = s.get();
+    assert_eq!(e.released_via(), Some(ReleasePath::Code));
+    assert_eq!(e.proof().unwrap().kind, ProofKind::Attestation);
+}
+
+#[test]
+fn proof_with_wrong_code_records_nothing() {
+    let s = setup().funded();
+    assert_err(
+        s.escrow.try_submit_proof_with_code(
+            &ProofKind::Attestation,
+            &s.uri(""),
+            &s.hash(),
+            &s.wrong_code(),
+        ),
+        Error::InvalidCode,
+    );
+    let e = s.get();
+    assert_eq!(e.state, State::Funded);
+    assert!(e.proof().is_none());
+}
+
+#[test]
+fn proof_with_code_is_accepted_after_delivery_deadline() {
+    let s = setup().funded();
+    s.at(s.get().delivery_deadline + DAY);
+    s.escrow
+        .submit_proof_with_code(&ProofKind::Attestation, &s.uri(""), &s.hash(), &s.code());
+    s.assert_seller_paid();
 }
