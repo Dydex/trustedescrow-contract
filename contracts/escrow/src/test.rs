@@ -5,7 +5,7 @@ use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Bytes, BytesN, Env,
+    Bytes, BytesN, Env, String,
 };
 
 const AMOUNT: i128 = 1_000_000_000;
@@ -16,6 +16,7 @@ const DELIVERY_WINDOW: u64 = 7 * DAY;
 const RECEIPT_WINDOW: u64 = 3 * DAY;
 const ARBITRATION_WINDOW: u64 = 30 * DAY;
 const CODE: &[u8] = b"K7M29XQF4TBNR3WD";
+const TRACKING_URI: &str = "https://track.example/ABC123";
 
 struct Setup<'a> {
     env: Env,
@@ -107,8 +108,27 @@ impl Setup<'_> {
         self.token.balance(who)
     }
 
+    fn uri(&self, s: &str) -> String {
+        String::from_str(&self.env, s)
+    }
+
+    fn hash(&self) -> BytesN<32> {
+        BytesN::from_array(&self.env, &[7; 32])
+    }
+
+    fn deliver(&self) {
+        self.escrow
+            .submit_proof(&ProofKind::Tracking, &self.uri(TRACKING_URI), &self.hash());
+    }
+
     fn funded(self) -> Self {
         self.escrow.fund();
+        self
+    }
+
+    fn delivered(self) -> Self {
+        self.escrow.fund();
+        self.deliver();
         self
     }
 
@@ -255,4 +275,103 @@ fn stranger_can_cancel_only_after_funding_deadline() {
 fn funded_escrow_cannot_be_cancelled() {
     let s = setup().funded();
     assert_err(s.escrow.try_cancel(&s.buyer), Error::InvalidState);
+}
+
+// --- Proof -------------------------------------------------------------------
+
+#[test]
+fn seller_signs_proof_and_starts_receipt_window() {
+    let s = setup().funded();
+    s.at(START + DAY);
+    s.deliver();
+    s.assert_only_auth(&s.seller);
+    let e = s.get();
+    assert_eq!(e.state, State::Delivered);
+    assert_eq!(e.receipt_deadline, START + DAY + RECEIPT_WINDOW);
+    let proof = e.proof().unwrap();
+    assert_eq!(proof.submitted_at, START + DAY);
+    assert_eq!(proof.uri, s.uri(TRACKING_URI));
+}
+
+#[test]
+fn proof_requires_a_funded_escrow() {
+    let s = setup();
+    assert_err(
+        s.escrow
+            .try_submit_proof(&ProofKind::Tracking, &s.uri(TRACKING_URI), &s.hash()),
+        Error::InvalidState,
+    );
+}
+
+#[test]
+fn proof_is_rejected_at_delivery_deadline() {
+    let s = setup().funded();
+    s.at(s.get().delivery_deadline);
+    assert_err(
+        s.escrow
+            .try_submit_proof(&ProofKind::Tracking, &s.uri(TRACKING_URI), &s.hash()),
+        Error::DeadlinePassed,
+    );
+    assert_eq!(s.state(), State::Funded);
+}
+
+#[test]
+fn proof_is_single_shot() {
+    let s = setup().delivered();
+    let original = s.get().proof;
+    assert_err(
+        s.escrow.try_submit_proof(
+            &ProofKind::Content,
+            &s.uri("ipfs://other"),
+            &BytesN::from_array(&s.env, &[8; 32]),
+        ),
+        Error::ProofAlreadySubmitted,
+    );
+    assert_eq!(s.get().proof, original);
+}
+
+#[test]
+fn invalid_proof_uris_are_rejected() {
+    let s = setup().funded();
+    let too_long = std::format!("https://{}", "a".repeat(249));
+    assert_eq!(too_long.len(), 257);
+    let cases = [
+        (ProofKind::Tracking, ""),
+        (ProofKind::Content, ""),
+        (ProofKind::Tracking, "http://track.example/1"),
+        (ProofKind::Tracking, "ftp://track.example/1"),
+        (ProofKind::Tracking, "https://"),
+        (ProofKind::Tracking, "https://track.example/a b"),
+        (ProofKind::Tracking, too_long.as_str()),
+    ];
+    for (kind, uri) in cases {
+        assert_err(
+            s.escrow.try_submit_proof(&kind, &s.uri(uri), &s.hash()),
+            Error::InvalidUri,
+        );
+    }
+    assert_eq!(s.state(), State::Funded);
+}
+
+#[test]
+fn valid_proof_uris_are_accepted() {
+    let max_len = std::format!("https://{}", "a".repeat(248));
+    assert_eq!(max_len.len(), 256);
+    let cases = [
+        (ProofKind::Attestation, ""),
+        (
+            ProofKind::Content,
+            "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        ),
+        (
+            ProofKind::Content,
+            "ar://bNbA3TEQVL60xlgCcqdz4ZPHFZ711cZ3hmkpGttDt_U",
+        ),
+        (ProofKind::Tracking, max_len.as_str()),
+    ];
+    for (kind, uri) in cases {
+        let s = setup().funded();
+        s.escrow.submit_proof(&kind, &s.uri(uri), &s.hash());
+        assert_eq!(s.get().proof().unwrap().uri, s.uri(uri));
+    }
 }

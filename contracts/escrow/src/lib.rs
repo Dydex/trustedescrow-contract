@@ -7,7 +7,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, token,
-    Address, Env,
+    Address, BytesN, Env, String,
 };
 
 pub use trustescrow_types::{
@@ -18,6 +18,8 @@ pub use trustescrow_types::{
 pub const MAX_URI_LEN: u32 = 256;
 pub const MIN_WINDOW: u64 = 60 * 60;
 pub const MAX_WINDOW: u64 = 365 * 24 * 60 * 60;
+
+const ALLOWED_SCHEMES: [&[u8]; 3] = [b"https://", b"ipfs://", b"ar://"];
 
 const DAY_IN_LEDGERS: u32 = 17_280;
 const TTL_THRESHOLD: u32 = 30 * DAY_IN_LEDGERS;
@@ -63,6 +65,14 @@ pub struct Created {
 pub struct Funded {
     pub amount: i128,
     pub delivery_deadline: u64,
+}
+
+#[contractevent(topics = ["proof"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProofSubmitted {
+    pub kind: ProofKind,
+    pub hash: BytesN<32>,
+    pub receipt_deadline: u64,
 }
 
 #[contractevent(topics = ["cancelled"])]
@@ -182,6 +192,39 @@ impl EscrowContract {
         Cancelled { by: caller }.publish(&env);
     }
 
+    /// Seller commits proof of delivery. Single-shot. Starts the buyer's
+    /// receipt window; it does not by itself entitle the seller to anything.
+    pub fn submit_proof(env: Env, kind: ProofKind, uri: String, hash: BytesN<32>) {
+        let mut e = load(&env);
+        if e.proof().is_some() {
+            panic_with_error!(&env, Error::ProofAlreadySubmitted);
+        }
+        require_state(&env, &e, State::Funded);
+        e.seller.require_auth();
+        let now = now(&env);
+        if now >= e.delivery_deadline {
+            panic_with_error!(&env, Error::DeadlinePassed);
+        }
+        validate_uri(&env, kind, &uri);
+
+        e.receipt_deadline = add(&env, now, e.receipt_window);
+        e.proof = ProofRecord::Submitted(Proof {
+            kind,
+            uri,
+            hash: hash.clone(),
+            submitted_at: now,
+        });
+        e.state = State::Delivered;
+        save(&env, &e);
+
+        ProofSubmitted {
+            kind,
+            hash,
+            receipt_deadline: e.receipt_deadline,
+        }
+        .publish(&env);
+    }
+
     pub fn get(env: Env) -> Escrow {
         load(&env)
     }
@@ -219,6 +262,30 @@ fn extend_ttl(env: &Env) {
 fn require_state(env: &Env, e: &Escrow, state: State) {
     if e.state != state {
         panic_with_error!(env, Error::InvalidState);
+    }
+}
+
+fn validate_uri(env: &Env, kind: ProofKind, uri: &String) {
+    let len = uri.len();
+    if len == 0 {
+        if kind == ProofKind::Attestation {
+            return;
+        }
+        panic_with_error!(env, Error::InvalidUri);
+    }
+    if len > MAX_URI_LEN {
+        panic_with_error!(env, Error::InvalidUri);
+    }
+    let mut buf = [0u8; MAX_URI_LEN as usize];
+    let bytes = &mut buf[..len as usize];
+    uri.copy_into_slice(bytes);
+
+    let printable = bytes.iter().all(|b| (0x21..=0x7e).contains(b));
+    let has_scheme = ALLOWED_SCHEMES
+        .iter()
+        .any(|scheme| bytes.len() > scheme.len() && bytes.starts_with(scheme));
+    if !printable || !has_scheme {
+        panic_with_error!(env, Error::InvalidUri);
     }
 }
 
