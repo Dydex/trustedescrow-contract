@@ -63,3 +63,7 @@ Handing the factory to a new admin takes two steps: the current admin calls `pro
 ## Status
 
 v1 draft, not audited. Do not use on mainnet without an external review. See [SECURITY.md](SECURITY.md) to report a vulnerability.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
