@@ -60,9 +60,6 @@ Clients must pin the escrow WASM hash they have audited and refuse to fund an es
 
 Handing the factory to a new admin takes two steps: the current admin calls `propose_admin`, and nothing changes until the proposed address calls `accept_admin`. `set_config` cannot change the admin, so a mistyped address can never lock the factory.
 
-## Status
-
-v1 draft, not audited. Do not use on mainnet without an external review. See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## License
 
