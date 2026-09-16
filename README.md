@@ -61,6 +61,18 @@ Clients must pin the escrow WASM hash they have audited and refuse to fund an es
 Handing the factory to a new admin takes two steps: the current admin calls `propose_admin`, and nothing changes until the proposed address calls `accept_admin`. `set_config` cannot change the admin, so a mistyped address can never lock the factory.
 
 
+## Live on testnet
+
+| What | Id |
+|---|---|
+| Factory | `CDMCI4VW5XARBPITNHNENEDVKBMKDICFCKJJ3RYDAKDBZRQMGPUV5JIO` |
+| Escrow WASM hash | `7a91c255c29edb7114a546026e807f144a8adc58460e4608e314a77ac629281d` |
+| Settlement token (test asset SAC) | `CBXMP6YK4B4WZKN4UAF7OZUEGFEUURVPSUQS5QGG5SG5DRWBRQDWAOOL` |
+
+`deployments/testnet.env` holds the same values plus the admin, arbitrator and fee recipient.
+
+One escrow has been run end to end against this deployment: [create](https://stellar.expert/explorer/testnet/tx/16515feb9764f9ef3021bdbd20744c01d467ce6eee22a8cb31d038b964589e7d), [fund](https://stellar.expert/explorer/testnet/tx/8e305e4323098a99564e985e3ca671e805219ae66250d1e3b17d42a5e15c1c02), [submit_proof](https://stellar.expert/explorer/testnet/tx/48c038bed1a5c6d8428339902cd74d54077cc7c494a51ba3499658db7e1b875a), then release with the buyer's delivery code. Of 100 units deposited the seller received 98.5 and the fee recipient 1.5, and the escrow ended `Released` via `Code` holding nothing.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
