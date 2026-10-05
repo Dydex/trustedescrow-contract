@@ -1145,3 +1145,112 @@ fn resolve_outside_dispute_is_rejected() {
         Error::InvalidState,
     );
 }
+
+// --- Settlement token edge cases (real SAC behaviour) -------------------------
+//
+// `default_params` uses the real built-in Stellar Asset Contract, not a mock,
+// so these tests exercise its actual trustline/authorization/clawback
+// semantics rather than guessing at them. In this contract there is no
+// separate "trustline does not exist" state distinct from "deauthorized": a
+// never-touched address defaults to authorized, and `AUTH_REQUIRED` is what
+// makes a fresh address start deauthorized — so that flag is how these tests
+// simulate "cannot hold this asset yet".
+
+#[test]
+fn seller_without_authorization_blocks_release_but_the_buyer_can_still_be_refunded() {
+    let env = new_env();
+    let mut params = default_params(&env);
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    sac.issuer().set_flag(IssuerFlags::RequiredFlag);
+    // AUTH_REQUIRED defaults every address to deauthorized — the buyer and
+    // fee recipient included, and (since this contract's own balance is
+    // gated the same way) the escrow itself. Authorize everyone but the
+    // seller, who is the one under test.
+    let admin = StellarAssetClient::new(&env, &sac.address());
+    admin.set_authorized(&params.order.buyer, &true);
+    admin.set_authorized(&params.fee_recipient, &true);
+    params.order.token = sac.address();
+    let s = setup_from(env, params);
+    admin.set_authorized(&s.escrow.address, &true);
+    let s = s.delivered();
+
+    // The seller itself was never authorized, so every path that would pay
+    // it fails — but it's the seller's own payout that's blocked, not the
+    // escrow.
+    assert!(s.escrow.try_release_with_code(&s.code()).is_err());
+    assert!(s.escrow.try_confirm().is_err());
+    assert_eq!(s.state(), State::Delivered);
+
+    // The buyer still has an exit: dispute, and the arbitrator refunds.
+    s.escrow.dispute(&s.buyer);
+    s.escrow.resolve(&Outcome::Refund);
+    s.assert_buyer_refunded();
+}
+
+#[test]
+fn buyer_frozen_after_funding_blocks_seller_refund_but_release_still_works() {
+    let env = new_env();
+    let mut params = default_params(&env);
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    sac.issuer().set_flag(IssuerFlags::RevocableFlag);
+    params.order.token = sac.address();
+    let s = setup_from(env, params).funded();
+    s.set_authorized(&s.buyer, false);
+
+    // seller_refund pays the buyer, so it now fails.
+    assert!(s.escrow.try_seller_refund().is_err());
+    assert_eq!(s.state(), State::Funded);
+
+    // Release never touches the buyer, so it's still a live exit — as long
+    // as the seller delivers. A seller who never does leaves this escrow
+    // with no exit at all until the buyer is reauthorised (see the
+    // follow-up issue opened for this).
+    s.deliver();
+    s.escrow.release_with_code(&s.code());
+    s.assert_seller_paid();
+}
+
+#[test]
+fn buyer_frozen_before_the_delivery_deadline_blocks_that_refund_too() {
+    let env = new_env();
+    let mut params = default_params(&env);
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    sac.issuer().set_flag(IssuerFlags::RevocableFlag);
+    params.order.token = sac.address();
+    let s = setup_from(env, params).funded();
+    s.set_authorized(&s.buyer, false);
+
+    s.at(s.get().delivery_deadline);
+    assert!(s.escrow.try_refund_after_delivery_timeout().is_err());
+    assert_eq!(s.state(), State::Funded);
+}
+
+#[test]
+fn clawback_from_a_funded_escrow_leaves_it_permanently_stuck() {
+    let env = new_env();
+    let mut params = default_params(&env);
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    sac.issuer().set_flag(IssuerFlags::ClawbackEnabledFlag);
+    params.order.token = sac.address();
+    let s = setup_from(env, params).funded();
+
+    StellarAssetClient::new(&s.env, &s.token.address).clawback(&s.escrow.address, &AMOUNT);
+    assert_eq!(s.balance(&s.escrow.address), 0);
+
+    // `get()` has no way to know: the record still claims the full amount
+    // is held, because nothing re-derives it from the real token balance.
+    let e = s.get();
+    assert_eq!(e.state, State::Funded);
+    assert_eq!(e.amount, AMOUNT);
+
+    // Every exit tries to move the full (no longer existing) amount, so
+    // every one of them now fails — permanently. This is why the "Token
+    // requirements" section below tells the factory admin to never
+    // allowlist a clawback-enabled asset: see the follow-up issue opened
+    // for a possible on-chain reconciliation path.
+    assert!(s.escrow.try_seller_refund().is_err());
+    assert_eq!(s.state(), State::Funded);
+    s.deliver();
+    assert!(s.escrow.try_release_with_code(&s.code()).is_err());
+    assert_eq!(s.state(), State::Delivered);
+}
