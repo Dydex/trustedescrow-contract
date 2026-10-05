@@ -17,13 +17,15 @@ A buyer deposits, the seller proves delivery on-chain, the buyer proves receipt 
 
 ## Build and test
 
-Requires Rust stable with the `wasm32v1-none` target (`rust-toolchain.toml` pins both).
+`rust-toolchain.toml` pins an exact Rust version, not `stable`: the same source compiles to a different WASM on every new Rust release, and clients pin the escrow WASM hash, so the toolchain that produces it has to be reproducible too. `rustup` installs the pinned version and the `wasm32v1-none` target automatically on first use.
 
 ```sh
 make build   # release WASM into target/wasm32v1-none/release/
 make test    # builds the WASM first — the factory tests deploy the real escrow binary
 make clippy
 ```
+
+A release's WASM is exactly `make build`'s output on the tagged commit, with the toolchain `rust-toolchain.toml` pins at that tag — that's the whole build command; nothing else feeds into the hash. CI runs it on every push and prints both WASMs' sha256 so that number is independently checkable, not just asserted in release notes.
 
 `cargo test` on its own fails to compile the factory tests if the escrow WASM hasn't been built yet. Dependencies are compiled with optimisation even in test builds, because the Soroban host is very slow without it; the first build takes a while, later ones are quick.
 
@@ -72,6 +74,8 @@ Handing the factory to a new admin takes two steps: the current admin calls `pro
 | Settlement token (test asset SAC) | `CBXMP6YK4B4WZKN4UAF7OZUEGFEUURVPSUQS5QGG5SG5DRWBRQDWAOOL` |
 
 `deployments/testnet.env` holds the same values plus the admin, arbitrator and fee recipient.
+
+This deployment predates the toolchain pin above, built with whatever was `stable` at the time; rebuilding it with a pinned compiler was attempted but did not reproduce the recorded hash, and the exact version originally used wasn't recoverable. The next testnet deploy will be built with the pinned toolchain, so its hash can be reproduced from here on.
 
 One escrow has been run end to end against this deployment: [create](https://stellar.expert/explorer/testnet/tx/16515feb9764f9ef3021bdbd20744c01d467ce6eee22a8cb31d038b964589e7d), [fund](https://stellar.expert/explorer/testnet/tx/8e305e4323098a99564e985e3ca671e805219ae66250d1e3b17d42a5e15c1c02), [submit_proof](https://stellar.expert/explorer/testnet/tx/48c038bed1a5c6d8428339902cd74d54077cc7c494a51ba3499658db7e1b875a), then release with the buyer's delivery code. Of 100 units deposited the seller received 98.5 and the fee recipient 1.5, and the escrow ended `Released` via `Code` holding nothing.
 
