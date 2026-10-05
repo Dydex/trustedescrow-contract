@@ -64,9 +64,10 @@ enum Op {
     RefundAfterDeliveryTimeout,
     RefundAfterArbitrationTimeout,
     SellerRefund,
+    SweepFee,
 }
 
-const ALL_OPS: [Op; 12] = [
+const ALL_OPS: [Op; 13] = [
     Op::Fund,
     Op::Cancel,
     Op::SubmitProof,
@@ -79,6 +80,7 @@ const ALL_OPS: [Op; 12] = [
     Op::RefundAfterDeliveryTimeout,
     Op::RefundAfterArbitrationTimeout,
     Op::SellerRefund,
+    Op::SweepFee,
 ];
 
 /// Calls that can plausibly succeed from `state`. Timeouts appear even though
@@ -234,6 +236,7 @@ impl World<'_> {
                 succeeded(self.escrow.try_refund_after_arbitration_timeout())
             }
             Op::SellerRefund => succeeded(self.escrow.try_seller_refund()),
+            Op::SweepFee => succeeded(self.escrow.try_sweep_fee()),
         }
     }
 
@@ -281,10 +284,14 @@ impl World<'_> {
                     }
                     ReleasePath::Arbitration => assert!(e.dispute().is_some(), "{ctx}"),
                 }
+                // A terminal escrow holds no tokens except an unswept fee:
+                // the seller is paid in full regardless of whether the fee
+                // transfer to `fee_recipient` succeeded.
                 let expected_fee = AMOUNT * FEE_BPS as i128 / 10_000;
+                assert_eq!(held, e.unswept_fee, "{ctx}");
                 assert_eq!(
-                    (held, buyer, seller, fee),
-                    (0, 0, AMOUNT - expected_fee, expected_fee),
+                    (buyer, seller, fee + e.unswept_fee),
+                    (0, AMOUNT - expected_fee, expected_fee),
                     "{ctx}"
                 );
             }
@@ -302,6 +309,10 @@ impl World<'_> {
         }
         if !matches!(e.state, State::Released | State::Refunded) {
             assert_eq!(e.settlement, Settlement::Open, "{ctx}");
+        }
+        // Only a release can ever leave a fee unswept.
+        if e.state != State::Released {
+            assert_eq!(e.unswept_fee, 0, "{ctx}");
         }
         e
     }
