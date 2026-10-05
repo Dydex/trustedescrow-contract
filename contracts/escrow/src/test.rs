@@ -19,6 +19,7 @@ const ARBITRATION_WINDOW: u64 = 30 * DAY;
 const CODE: &[u8] = b"K7M29XQF4TBNR3WD";
 const ONE_BYTE_OFF: &[u8] = b"K7M29XQF4TBNR3WE";
 const TRACKING_URI: &str = "https://track.example/ABC123";
+const SALT: [u8; 32] = [9; 32];
 
 struct Setup<'a> {
     env: Env,
@@ -57,6 +58,7 @@ fn default_params(env: &Env) -> EscrowParams {
         arbitrator: Address::generate(env),
         fee_bps: FEE_BPS,
         fee_recipient: Address::generate(env),
+        salt: BytesN::from_array(env, &SALT),
     }
 }
 
@@ -241,6 +243,7 @@ fn constructor_records_order_and_operator_config() {
     assert!(e.proof().is_none());
     assert!(e.dispute().is_none());
     assert_eq!(e.settlement, Settlement::Open);
+    assert_eq!(e.salt, BytesN::from_array(&s.env, &SALT));
     assert_eq!(s.balance(&s.escrow.address), 0);
     assert_eq!(s.balance(&s.buyer), AMOUNT);
 }

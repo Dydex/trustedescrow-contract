@@ -160,6 +160,7 @@ impl EscrowContract {
             proof: ProofRecord::Pending,
             dispute: DisputeRecord::NotOpened,
             settlement: Settlement::Open,
+            salt: params.salt,
         };
         save(&env, &escrow);
 

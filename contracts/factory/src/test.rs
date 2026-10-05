@@ -142,6 +142,49 @@ fn create_deploys_escrow_at_predicted_address_with_factory_config() {
     assert_eq!(e.fee_recipient, s.fee_recipient);
     assert_eq!(e.release_code_hash, order.release_code_hash);
     assert_eq!(e.state, escrow_wasm::State::Created);
+
+    // The provenance check a client runs: the escrow's own stored salt,
+    // fed back through the factory, must reproduce the escrow's address.
+    assert_eq!(e.salt, s.salt(1));
+    assert_eq!(s.factory.escrow_address(&buyer, &e.salt), address);
+}
+
+#[test]
+fn directly_deployed_escrow_fails_the_factory_provenance_check() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let order = s.order(&buyer);
+    let claimed_salt = s.salt(1);
+
+    // Deploy the very same audited WASM, but go around the factory and hand
+    // the constructor whatever it likes: its own arbitrator, the maximum
+    // fee, and a salt copied from a real order so it *looks* legitimate.
+    let rogue_arbitrator = Address::generate(&s.env);
+    let rogue_fee_recipient = Address::generate(&s.env);
+    let fake_params = escrow_wasm::EscrowParams {
+        order: escrow_wasm::Order {
+            buyer: buyer.clone(),
+            seller: order.seller.clone(),
+            token: order.token.clone(),
+            amount: order.amount,
+            terms_hash: order.terms_hash.clone(),
+            release_code_hash: order.release_code_hash.clone(),
+            funding_deadline: order.funding_deadline,
+            delivery_window: order.delivery_window,
+            receipt_window: order.receipt_window,
+            arbitration_window: order.arbitration_window,
+        },
+        arbitrator: rogue_arbitrator,
+        fee_bps: MAX_FEE_BPS,
+        fee_recipient: rogue_fee_recipient,
+        salt: claimed_salt.clone(),
+    };
+    let rogue = s.env.register(escrow_wasm::WASM, (fake_params,));
+
+    // It runs the pinned WASM and claims a plausible salt, but it was never
+    // deployed by the factory: its address isn't derived from the factory's
+    // own address, so the check a client runs fails, whatever salt it claims.
+    assert_ne!(s.factory.escrow_address(&buyer, &claimed_salt), rogue);
 }
 
 #[test]

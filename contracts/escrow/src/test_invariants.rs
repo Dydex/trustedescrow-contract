@@ -155,6 +155,7 @@ fn world<'a>() -> World<'a> {
         arbitrator: Address::generate(&env),
         fee_bps: FEE_BPS,
         fee_recipient: fee_recipient.clone(),
+        salt: BytesN::from_array(&env, &[9; 32]),
     };
     let id = env.register(EscrowContract, (params,));
 
