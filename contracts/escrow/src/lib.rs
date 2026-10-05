@@ -43,6 +43,7 @@ pub enum Error {
     InvalidWindow = 11,
     InvalidUri = 12,
     Overflow = 13,
+    NoFeeToSweep = 14,
 }
 
 #[contracttype]
@@ -104,6 +105,12 @@ pub struct Cancelled {
     pub by: Address,
 }
 
+#[contractevent(topics = ["fee_swept"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeSwept {
+    pub fee: i128,
+}
+
 #[contract]
 pub struct EscrowContract;
 
@@ -160,6 +167,7 @@ impl EscrowContract {
             proof: ProofRecord::Pending,
             dispute: DisputeRecord::NotOpened,
             settlement: Settlement::Open,
+            unswept_fee: 0,
             salt: params.salt,
         };
         save(&env, &escrow);
@@ -397,6 +405,26 @@ impl EscrowContract {
         load(&env)
     }
 
+    /// Retry the fee transfer to `fee_recipient` after it failed on release
+    /// (the recipient had no trustline, or was frozen). Permissionless, and
+    /// can only ever pay `fee_recipient`. Fails if there is nothing unswept.
+    pub fn sweep_fee(env: Env) {
+        let mut e = load(&env);
+        if e.unswept_fee <= 0 {
+            panic_with_error!(&env, Error::NoFeeToSweep);
+        }
+        let fee = e.unswept_fee;
+        e.unswept_fee = 0;
+        save(&env, &e);
+
+        token::TokenClient::new(&env, &e.token).transfer(
+            &env.current_contract_address(),
+            &e.fee_recipient,
+            &fee,
+        );
+        FeeSwept { fee }.publish(&env);
+    }
+
     /// Extend the instance TTL. Public so a bumper job can keep idle escrows live.
     pub fn bump(env: Env) {
         extend_ttl(&env);
@@ -499,14 +527,23 @@ fn release(env: &Env, mut e: Escrow, path: ReleasePath) {
 
     e.state = State::Released;
     e.settlement = Settlement::Released(path);
-    save(env, &e);
 
     let token = token::TokenClient::new(env, &e.token);
     let this = env.current_contract_address();
     token.transfer(&this, &e.seller, &payout);
-    if fee > 0 {
-        token.transfer(&this, &e.fee_recipient, &fee);
-    }
+
+    // `fee_recipient` is shared by every escrow. If it has lost its
+    // trustline or been frozen, that must never block the seller's payout
+    // above: keep the fee in the escrow instead of reverting the whole
+    // release. `sweep_fee` can retry once the recipient can receive it again.
+    let fee_sent = fee == 0
+        || matches!(
+            token.try_transfer(&this, &e.fee_recipient, &fee),
+            Ok(Ok(()))
+        );
+    e.unswept_fee = if fee_sent { 0 } else { fee };
+    save(env, &e);
+
     Released { path, payout, fee }.publish(env);
 }
 

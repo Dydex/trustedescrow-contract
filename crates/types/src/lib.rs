@@ -150,6 +150,11 @@ pub struct Escrow {
     pub proof: ProofRecord,
     pub dispute: DisputeRecord,
     pub settlement: Settlement,
+    /// Zero unless a fee transfer failed on release (the fee recipient had
+    /// no trustline, or was frozen). The seller is still paid in full either
+    /// way; this is only ever the platform's own fee, recoverable later with
+    /// `sweep_fee`. A terminal escrow holds no tokens except this.
+    pub unswept_fee: i128,
     /// The salt `Factory::create` used to deploy this escrow. A client
     /// checks provenance with `factory.escrow_address(buyer, salt) == this
     /// contract's address`; see [`EscrowParams::salt`].

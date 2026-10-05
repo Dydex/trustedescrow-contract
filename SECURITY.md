@@ -16,7 +16,7 @@ v1 draft. **Not audited.** Do not deploy to mainnet or hold real value in these 
 
 Anything that breaks one of these properties:
 
-1. **Conservation.** On release, `payout + fee == amount`. On refund, the buyer receives exactly `amount`. A terminal escrow holds no tokens.
+1. **Conservation.** On release, `payout + fee == amount`, and the seller is paid in full regardless of whether the fee transfer to `fee_recipient` succeeds. On refund, the buyer receives exactly `amount`. A terminal escrow holds no tokens, except a fee that failed to reach `fee_recipient` on release — recoverable at any time via the permissionless `sweep_fee`, and never payable to anyone else.
 2. **Destination.** Principal only ever goes to the buyer or the seller; the fee only to `fee_recipient`, and only on release.
 3. **Two-sided release.** The seller is paid only with seller proof on-chain plus the buyer's delivery code or signature, or by the arbitrator's ruling. No timeout pays the seller.
 4. **Arbitrator bounds.** `resolve` works only in `Disputed`, only for the arbitrator, only before the arbitration deadline, and only chooses release or refund.

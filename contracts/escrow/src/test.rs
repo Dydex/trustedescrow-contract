@@ -3,7 +3,9 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{storage::Instance as _, Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{
+        storage::Instance as _, Address as _, Events, IssuerFlags, Ledger, MockAuth, MockAuthInvoke,
+    },
     token::{StellarAssetClient, TokenClient},
     xdr::ContractEvent,
     Bytes, BytesN, Env, Event, IntoVal, String,
@@ -39,9 +41,11 @@ fn new_env() -> Env {
 }
 
 fn default_params(env: &Env) -> EscrowParams {
-    let token = env
-        .register_stellar_asset_contract_v2(Address::generate(env))
-        .address();
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(env));
+    // Lets tests simulate the fee recipient losing authorisation (a frozen
+    // account), the same as a real issuer with AUTH_REVOCABLE set.
+    sac.issuer().set_flag(IssuerFlags::RevocableFlag);
+    let token = sac.address();
     EscrowParams {
         order: Order {
             buyer: Address::generate(env),
@@ -110,6 +114,12 @@ impl Setup<'_> {
 
     fn balance(&self, who: &Address) -> i128 {
         self.token.balance(who)
+    }
+
+    /// (De-)authorise `who` to use its balance of the settlement token —
+    /// simulates a frozen account or a missing trustline.
+    fn set_authorized(&self, who: &Address, authorized: bool) {
+        StellarAssetClient::new(&self.env, &self.token.address).set_authorized(who, &authorized);
     }
 
     fn code(&self) -> Bytes {
@@ -243,6 +253,7 @@ fn constructor_records_order_and_operator_config() {
     assert!(e.proof().is_none());
     assert!(e.dispute().is_none());
     assert_eq!(e.settlement, Settlement::Open);
+    assert_eq!(e.unswept_fee, 0);
     assert_eq!(e.salt, BytesN::from_array(&s.env, &SALT));
     assert_eq!(s.balance(&s.escrow.address), 0);
     assert_eq!(s.balance(&s.buyer), AMOUNT);
@@ -528,6 +539,69 @@ fn release_conserves_amount_for_any_fee() {
             assert_eq!(s.balance(&s.escrow.address), 0);
         }
     }
+}
+
+// --- Fee sweep -----------------------------------------------------------------
+
+#[test]
+fn a_frozen_fee_recipient_does_not_block_the_seller() {
+    let s = setup().delivered();
+    s.set_authorized(&s.fee_recipient, false);
+
+    s.escrow.release_with_code(&s.code());
+
+    assert_eq!(s.state(), State::Released);
+    assert_eq!(s.balance(&s.seller), AMOUNT - FEE);
+    assert_eq!(s.balance(&s.fee_recipient), 0);
+    assert_eq!(s.balance(&s.escrow.address), FEE);
+    assert_eq!(s.get().unswept_fee, FEE);
+}
+
+#[test]
+fn sweep_fee_recovers_it_once_the_recipient_can_receive_again() {
+    let s = setup().delivered();
+    s.set_authorized(&s.fee_recipient, false);
+    s.escrow.release_with_code(&s.code());
+
+    s.set_authorized(&s.fee_recipient, true);
+    s.escrow.sweep_fee();
+
+    assert_eq!(s.get().unswept_fee, 0);
+    assert_eq!(s.balance(&s.fee_recipient), FEE);
+    assert_eq!(s.balance(&s.escrow.address), 0);
+}
+
+#[test]
+fn sweep_fee_is_permissionless() {
+    let s = setup().delivered();
+    s.set_authorized(&s.fee_recipient, false);
+    s.escrow.release_with_code(&s.code());
+    s.set_authorized(&s.fee_recipient, true);
+
+    s.escrow.sweep_fee();
+    assert!(s.env.auths().is_empty());
+}
+
+#[test]
+fn sweeping_with_nothing_due_is_rejected() {
+    let s = setup().delivered();
+    s.escrow.release_with_code(&s.code());
+    assert_eq!(s.get().unswept_fee, 0);
+    assert_err(s.escrow.try_sweep_fee(), Error::NoFeeToSweep);
+}
+
+#[test]
+fn sweep_fee_emits_fee_swept() {
+    let s = setup().delivered();
+    s.set_authorized(&s.fee_recipient, false);
+    s.escrow.release_with_code(&s.code());
+    s.set_authorized(&s.fee_recipient, true);
+
+    s.escrow.sweep_fee();
+    assert_eq!(
+        s.escrow_events(),
+        std::vec![s.event(&FeeSwept { fee: FEE })]
+    );
 }
 
 // --- Buyer confirmation ------------------------------------------------------
