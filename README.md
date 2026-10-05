@@ -48,6 +48,15 @@ A delivery code is 80 bits of entropy written as 16 Crockford base32 characters 
 
 Clients must normalise input before hashing or submitting it: strip whitespace and hyphens, uppercase, and map `I`/`L` to `1` and `O` to `0`. [crates/code](crates/code) implements this, and [test-vectors/delivery-codes.json](test-vectors/delivery-codes.json) holds vectors produced by an independent implementation. A client that passes them produces the same bytes the contract checks.
 
+## Token requirements
+
+The escrow is only ever as good as the settlement token's own behaviour, which the contract cannot see or control. `contracts/escrow/src/test.rs` exercises the real built-in Stellar Asset Contract, not a mock, to show what actually happens:
+
+- **A party who can't hold the asset blocks only the transfer that would pay them, never the other side's exit.** If the seller is never authorised to receive it, release and confirm fail, but the buyer still gets refunded through a dispute. If the buyer is deauthorised after funding, every refund fails, but release still works as long as the seller delivers. Either way the escrow keeps moving — just not in every direction.
+- **Clawback is the one flag that can leave an escrow with no exit at all.** The contract records `amount` once at funding and never re-reads the real token balance to check it; `get()` has no way to learn that the tokens it believes it holds are gone. If the issuer claws back from the escrow's own balance, every exit — release, every refund path, `seller_refund` — tries to move the full original amount and fails, forever. The escrow is left recording a state it can never leave.
+
+**The factory admin must never allowlist a clawback-enabled asset.** There is no on-chain way for the contract to defend against its own balance being taken out from under it; refusing the asset at the allowlist is the only mitigation. `AUTH_REQUIRED` and `AUTH_REVOCABLE` assets are safe to allowlist — they can block a specific party's payout, but never both sides' exits at once, and never desynchronise the record from reality the way clawback can.
+
 ## Deploying (testnet)
 
 With the [Stellar CLI](https://developers.stellar.org/docs/tools/cli) and a funded identity:
