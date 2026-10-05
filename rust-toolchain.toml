@@ -1,5 +1,9 @@
 [toolchain]
-channel = "stable"
+# Pinned, not "stable": the same source compiles to a different WASM on every
+# new Rust release, and clients pin the escrow WASM hash. Bump this
+# deliberately, in the same change that republishes that hash everywhere it's
+# pinned (frontend, docs, deployments/testnet.env).
+channel = "1.98.0"
 targets = ["wasm32v1-none"]
 profile = "minimal"
 components = ["rustfmt", "clippy"]

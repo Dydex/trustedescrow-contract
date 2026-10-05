@@ -11,8 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # rust-toolchain.toml pins the channel, target and components.
-      - uses: dtolnay/rust-toolchain@stable
+      # Must match the channel pinned in rust-toolchain.toml: this action's
+      # @ref picks the toolchain itself and does not read that file, so a
+      # mismatch here would build with a different compiler than the pin.
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: wasm32v1-none
           components: rustfmt, clippy
@@ -32,5 +34,7 @@ jobs:
       - name: Test
         run: cargo test
 
-      - name: WASM sizes
-        run: ls -l target/wasm32v1-none/release/*.wasm
+      - name: WASM sizes and hashes
+        run: |
+          ls -l target/wasm32v1-none/release/*.wasm
+          sha256sum target/wasm32v1-none/release/*.wasm
