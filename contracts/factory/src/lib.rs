@@ -110,6 +110,7 @@ impl Factory {
             arbitrator: config.arbitrator,
             fee_bps: config.fee_bps,
             fee_recipient: config.fee_recipient,
+            salt: salt.clone(),
         };
 
         let escrow = env

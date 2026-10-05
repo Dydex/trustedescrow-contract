@@ -58,6 +58,8 @@ The script uploads the escrow WASM, deploys the factory, allowlists the settleme
 
 Clients must pin the escrow WASM hash they have audited and refuse to fund an escrow instance running anything else. A factory config change only affects escrows created after it, so a swapped WASM hash can never reach an open trade.
 
+Pinning the WASM hash is not enough on its own: anyone can deploy that same audited WASM directly, outside the factory, with their own arbitrator and fee recipient. Clients must also check **factory provenance** before funding: each escrow stores the `salt` the buyer passed to `Factory::create`, and `factory.escrow_address(escrow.buyer, escrow.salt)` must equal the escrow's own address. Only the factory's deployer address can produce that match, so a directly-deployed escrow fails this check no matter what salt it claims.
+
 Handing the factory to a new admin takes two steps: the current admin calls `propose_admin`, and nothing changes until the proposed address calls `accept_admin`. `set_config` cannot change the admin, so a mistyped address can never lock the factory.
 
 

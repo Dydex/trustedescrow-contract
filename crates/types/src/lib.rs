@@ -113,6 +113,13 @@ pub struct EscrowParams {
     pub arbitrator: Address,
     pub fee_bps: u32,
     pub fee_recipient: Address,
+    /// The salt the buyer passed to `Factory::create`. Lets a client prove
+    /// provenance: a real factory escrow satisfies
+    /// `factory.escrow_address(buyer, salt) == this contract's address`.
+    /// Only the factory's deployer address can produce that match, so a
+    /// directly-deployed escrow can never pass the check, whatever salt it
+    /// claims.
+    pub salt: BytesN<32>,
 }
 
 #[contracttype]
@@ -143,6 +150,10 @@ pub struct Escrow {
     pub proof: ProofRecord,
     pub dispute: DisputeRecord,
     pub settlement: Settlement,
+    /// The salt `Factory::create` used to deploy this escrow. A client
+    /// checks provenance with `factory.escrow_address(buyer, salt) == this
+    /// contract's address`; see [`EscrowParams::salt`].
+    pub salt: BytesN<32>,
 }
 
 // The optional parts of an escrow are enums rather than `Option<T>`: soroban-sdk
